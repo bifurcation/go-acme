@@ -237,11 +237,52 @@ func TestEcJws(t *testing.T) {
 	}
 }
 
+// Legacy signature tests
+
+func TestLegacySignature(t *testing.T) {
+	fmt.Println("--> TestLegacySignature")
+	in := `
+  {
+    "alg": "RS256",
+    "nonce": "4EtbQdg_PyhjmaTOaEGXig",
+    "sig": "GBf-WmDMesuhx9FN_ScjkSz7efEP6nDs1lMWBeeBOsdtT9MB_oI5BbBU80rSJ9AvySp8_AFZ7gyIyilfvlZIA_9YHAfHwSo2qEMMTOraoWAJ7VYr1tR4J4axGXrI9LLVUdwwaED4DM2MUGSDYOTjPvWqvaeGP2QW3t-VhH3dnn2xqg39eHiJ4O6c8Lfz1sT2XsMBNa2nPA4MVOtsQbjls5FLf07JvBbro4acuMQWm7sAz4PHj3nst4wSN5q2WPQdlHYVbOD0J2HBPfBmEJdUJYCTaYu2w32Ao_8BRu4oTvTOVRajfXL6n15YG6CTDh_mtEQ0jDcr4WHAxTJPUus_aA",
+    "jwk": {
+      "kty": "RSA",
+      "n": "o6SZr4OGVRN9cpG5axNueQT3yj0TeAwpXdFdootTdGXKuTVYdeOQzLpshizY8PhJN66WvG8rt5PjT4vb0jy8t9LaIBKjUUbi8-0TpAkPLdEEcT8J5MjYhFKU2GDpg8EJ0JuAjapIaAZvVdruWKdpCM3k-LZ0yqZHGz5xT3RoVVWhDgwdaK3wkhEHfYmFtC5Ok6fIRkysUQDtHoI_I9hVevsSYYT0UkMmhN-YYlNC2JSCrAg9N0A2WAS5O0UZN91D3gAX13ouFpEMr4Rj1sCokzBMEZiyljjvhq-TIBJ4ImRMuEQXauxp85Dd_mrpverHZKcRfpGirEpxhvtU3bySUQ",
+      "e": "AQAB"
+    }
+  }`
+
+	csr, err := b64dec(`MIICWzCCAUMCAQAwFjEUMBIGA1UEAxMLZXhhbXBsZS5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCDVV8MK2rp3bQYmq-jrZEDdIBl8qmi2YXMSjw9rTwJpZKsyxXp6n_j48KY8DDl5M570X1_lAohawLVohw8YlkKHgheQMuCqTl-BOqLzzRg92hu4N29sxpwYDWWHm-9Afznsh9FED2cbi-tF0L4YIM23cwig-g1y0ts3mAYP-8UlGSwK1iXaaFNzqHPfI7_SDO_IaIzWaTMZY2z6dUlTHNfAIy-7unjTJr3aj9rEL7JU9hkxGaOf9ST4pmhGx7lfJFW2GdZ0wE0fXLQvhQDmXWnrNO7jwBTKlL9T_3XpJErUNwZVyi-npUmmgtMjvXcMC5h29ThSXAcpULvJ5gZe2HXAgMBAAGgADANBgkqhkiG9w0BAQUFAAOCAQEAIxXlkjYiu28kGKgIjP9r7vxhjQNEc225f5wpA6rapYP029Yd0c7o-W22b6UwUoErt_3zc6cYnWBm8F5ED4AXuoYZfm6Xgqvynq_t9lvL1O6Du0vTdHOj2V-MEVDZsAcjL-uMxh_7Hzi0ucPm1oXTBTml3Zr6KSNXDUloRoYJrCgRecxuP1uauZ8HKk-GfYWycWbtsPzFAjpblMChHwxOYTb-bgd79cGs9Mjia8EimLuh1g4bXGKTYIjZ6Q4Pitfz82kRzQuF8tDDWc9yACk3C5re3iSDAj6zRiDBaId_tkDr6IrF803l0PE6lwEVjT5OowjdmBZ5VDnkicA647ACtA`)
+	if err != nil {
+		t.Errorf("b64 decode error: %+v", err)
+		return
+	}
+
+	var out LegacyAcmeSignature
+	err = json.Unmarshal([]byte(in), &out)
+
+	if err != nil {
+		t.Errorf("JSON unmarshal error: %+v", err)
+		return
+	}
+
+	err = out.Verify(csr)
+	if err != nil {
+		t.Errorf("Signature failed verification: %+v", err)
+		return
+	}
+}
+
 // WebAPI Tests
 // XXX Only for manual testing
 
+const ENABLE_WEB = true
+
 func TestWebAPI(t *testing.T) {
-	fmt.Println("--> TestWebAPI")
-	http.Handle("/acme", AcmeWebAPI{})
-	http.ListenAndServe("localhost:4000", nil)
+	if ENABLE_WEB {
+		fmt.Println("--> TestWebAPI")
+		http.Handle("/acme", NewAcmeWebAPI())
+		http.ListenAndServe("localhost:4000", nil)
+	}
 }

@@ -81,9 +81,10 @@ type rawJsonWebKey struct {
 }
 
 type JsonWebKey struct {
-	KeyType string
-	Rsa     *rsa.PublicKey
-	Ec      *ecdsa.PublicKey
+	KeyType    string
+	Rsa        *rsa.PublicKey
+	Ec         *ecdsa.PublicKey
+	Thumbprint string
 }
 
 func (jwk JsonWebKey) MarshalJSON() ([]byte, error) {
@@ -127,6 +128,7 @@ func (jwk *JsonWebKey) UnmarshalJSON(data []byte) error {
 		}
 
 		jwk.Rsa = &rsa.PublicKey{N: n, E: e}
+		jwk.Thumbprint = raw.N
 	case "EC":
 		curve, err := name2curve(raw.Curve)
 		if err != nil {
@@ -144,6 +146,7 @@ func (jwk *JsonWebKey) UnmarshalJSON(data []byte) error {
 		}
 
 		jwk.Ec = &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
+		jwk.Thumbprint = raw.X + raw.Y
 	}
 
 	return nil

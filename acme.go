@@ -3,6 +3,7 @@ package acme
 import (
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -26,37 +27,27 @@ type AcmeMessage struct {
 	//     This could be a problem if we have fields with the same name
 	//     and different types.  If that happens, we'll need to split out
 	//     types and do a bunch of reserialization.
-	Type         string           `json:"type"`                   // Base
-	Error        string           `json:"error,omitempty"`        // error
-	Message      string           `json:"message,omitempty"`      //
-	MoreInfo     string           `json:"moreInfo,omitempty"`     //
-	Token        string           `json:"token,omitempty"`        // defer
-	Interval     float64          `json:"interval,omitempty"`     //
-	Identifier   string           `json:"identifier,omitempty"`   // challengeRequest
-	SessionID    string           `json:"sessionID,omitempty"`    // challenge
-	Nonce        string           `json:"nonce,omitempty"`        //
-	Challenges   []AcmeChallenge  `json:"challenges,omitempty"`   //
-	Combinations [][]int          `json:"combinations,omitempty"` //
-	Signature    JsonWebSignature `json:"signature,omitempty"`    // authorizationRequest
-	Responses    []AcmeResponse   `json:"responses,omitempty"`    //
-	Contact      []string         `json:"contact,omitempty"`      //
-	RecoverToken string           `json:"recoverToken,omitempty"` // authorization
-	Jwk          JsonWebKey       `json:"jwk,omitempty"`          //
-	Csr          string           `json:"csr,omitempty"`          // certificateRequest
-	Certificate  string           `json:"certificate,omitempty"`  // certificate
-	Chain        []string         `json:"chain,omitempty"`        //
-	Refresh      string           `json:"refresh,omitempty"`      //
+	Type         string              `json:"type"`                   // Base
+	Error        string              `json:"error,omitempty"`        // error
+	Message      string              `json:"message,omitempty"`      //
+	MoreInfo     string              `json:"moreInfo,omitempty"`     //
+	Token        string              `json:"token,omitempty"`        // defer
+	Interval     float64             `json:"interval,omitempty"`     //
+	Identifier   string              `json:"identifier,omitempty"`   // challengeRequest
+	SessionID    string              `json:"sessionID,omitempty"`    // challenge
+	Nonce        string              `json:"nonce,omitempty"`        //
+	Challenges   []AcmeChallenge     `json:"challenges,omitempty"`   //
+	Combinations [][]int             `json:"combinations,omitempty"` //
+	Signature    LegacyAcmeSignature `json:"signature,omitempty"`    // authorizationRequest
+	Responses    []AcmeResponse      `json:"responses,omitempty"`    //
+	Contact      []string            `json:"contact,omitempty"`      //
+	RecoverToken string              `json:"recoverToken,omitempty"` // authorization
+	Jwk          JsonWebKey          `json:"jwk,omitempty"`          //
+	Csr          string              `json:"csr,omitempty"`          // certificateRequest
+	Certificate  string              `json:"certificate,omitempty"`  // certificate
+	Chain        []string            `json:"chain,omitempty"`        //
+	Refresh      string              `json:"refresh,omitempty"`      //
 	// No new fields for statusRequest, revocationRequest, revocation
-}
-
-type AcmeChallenge struct {
-	// XXX Same flat strategy as with AcmeMessage
-	// TODO
-}
-
-type AcmeResponse struct {
-	// XXX Same flat strategy as with AcmeMessage
-	// TODO
 }
 
 // Quick error factories
@@ -75,6 +66,10 @@ func malformedRequestError() AcmeMessage {
 
 func notFoundError() AcmeMessage {
 	return acmeError("notFound", "Requested token not found")
+}
+
+func internalServerError() AcmeMessage {
+	return acmeError("internalServer", "Internal server error")
 }
 
 func notSupportedError() AcmeMessage {
@@ -118,25 +113,61 @@ type challengeSet struct {
 	Challenges []AcmeChallenge
 }
 
+type pendingAuth struct {
+	Domain string
+	Key    JsonWebKey
+}
+
 type AcmeWebAPI struct {
 	// XXX These state variables are just as in node-acme.  We will
 	//     want to offload them to something persistent
 
-	issuedChallenges  map[string]challengeSet // Nonce -> { domain, challenge }
-	authorizedKeys    map[string][]string     // Domain -> [ KeyThumbprints ]
-	recoveryKeys      map[string]string       // Key -> Domain
-	certificates      map[int]string          // Serial -> Certificate
-	revocationStatus  map[string]bool         // Certificate -> boolean
-	deferredResponses map[string]AcmeMessage  // Token  -> Response
+	issuedChallenges  map[string]challengeSet    // Nonce -> { domain, challenge }
+	authorizedKeys    map[string]map[string]bool // Domain -> [ KeyThumbprints ]
+	recoveryKeys      map[string]string          // Key -> Domain
+	certificates      map[int]string             // Serial -> Certificate
+	revocationStatus  map[string]bool            // Certificate -> boolean
+	pendingValidation map[string]pendingAuth     // Token -> { domain, key }
+	deferredResponses map[string]AcmeMessage     // Token  -> Response
+
+	privateKey     interface{}
+	certificate    x509.Certificate
+	derCertificate []byte
 }
 
-func (acme *AcmeWebAPI) Init() {
-	acme.issuedChallenges = make(map[string]challengeSet)
-	acme.authorizedKeys = make(map[string][]string)
-	acme.recoveryKeys = make(map[string]string)
-	acme.certificates = make(map[int]string)
-	acme.revocationStatus = make(map[string]bool)
-	acme.deferredResponses = make(map[string]AcmeMessage)
+func NewAcmeWebAPI() AcmeWebAPI {
+	priv, cert, der := newRoot()
+
+	return AcmeWebAPI{
+		issuedChallenges:  make(map[string]challengeSet),
+		authorizedKeys:    make(map[string]map[string]bool),
+		recoveryKeys:      make(map[string]string),
+		certificates:      make(map[int]string),
+		revocationStatus:  make(map[string]bool),
+		pendingValidation: make(map[string]pendingAuth),
+		deferredResponses: make(map[string]AcmeMessage),
+
+		privateKey:     priv,
+		certificate:    cert,
+		derCertificate: der,
+	}
+}
+
+func (acme *AcmeWebAPI) finalizePendingAuthorization(pending pendingAuth) {
+	curr, ok := acme.authorizedKeys[pending.Domain]
+	if !ok || (curr == nil) {
+		acme.authorizedKeys[pending.Domain] = make(map[string]bool)
+	}
+	acme.authorizedKeys[pending.Domain][pending.Key.Thumbprint] = true
+}
+
+func (acme *AcmeWebAPI) ProvideDeferredResponse(token string, message AcmeMessage) {
+	acme.deferredResponses[token] = message
+
+	pending, ok := acme.pendingValidation[token]
+	if ok && message.Type == "authorization" {
+		acme.finalizePendingAuthorization(pending)
+	}
 }
 
 func (acme *AcmeWebAPI) handleChallengeRequest(message AcmeMessage) AcmeMessage {
@@ -151,7 +182,10 @@ func (acme *AcmeWebAPI) handleChallengeRequest(message AcmeMessage) AcmeMessage 
 
 	// Generate a random nonce and challenge
 	nonce := randomString(32)
-	challenges := []AcmeChallenge{} // TODO generate
+	challenges := []AcmeChallenge{
+		SimpleHTTPSChallenge(),
+		DvsniChallenge(),
+	}
 	acme.issuedChallenges[nonce] = challengeSet{
 		Domain:     identifier,
 		Challenges: challenges,
@@ -179,43 +213,118 @@ func (acme *AcmeWebAPI) handleAuthorizationRequest(message AcmeMessage) AcmeMess
 	}
 	identifier := challenges.Domain
 
-	// TODO Verify signature
-	// TODO Do validation
-
-	return AcmeMessage{
-		Type:       "authorization",
-		Identifier: identifier,
+	// Verify signature
+	clientNonceInput, err := b64dec(clientNonce)
+	if err != nil {
+		return malformedRequestError()
 	}
+	err = message.Signature.Verify(append([]byte(identifier), clientNonceInput...))
+	if err != nil {
+		return unauthorizedError("Signature failed to validate")
+	}
+
+	// Do validation
+	deferralToken := newToken()
+	deferralMessage := AcmeMessage{
+		Type:  "defer",
+		Token: deferralToken,
+	}
+	go ValidateChallenges(acme, deferralToken, identifier, challenges.Challenges, message.Responses)
+	acme.pendingValidation[deferralToken] = pendingAuth{
+		Domain: identifier,
+		Key:    message.Signature.Jwk,
+	}
+	acme.ProvideDeferredResponse(deferralToken, deferralMessage)
+
+	return deferralMessage
 }
 
 func (acme *AcmeWebAPI) handleCertificateRequest(message AcmeMessage) AcmeMessage {
-	// TODO Verify signature
+	// Verify signature
+	csrBytes, err := b64dec(message.Csr)
+	if err != nil {
+		return malformedRequestError()
+	}
+	err = message.Signature.Verify(csrBytes)
+	if err != nil {
+		return unauthorizedError("Signature failed to validate")
+	}
 
 	// Parse the CSR
 	if isEmpty(message.Csr) {
 		return malformedRequestError()
 	}
-	csrBytes, err := b64dec(message.Csr)
+	csr, err := x509.ParseCertificateRequest(csrBytes)
 	if err != nil {
 		return malformedRequestError()
 	}
-	_, err = x509.ParseCertificateRequest(csrBytes)
+
+	// Verify the CSR
+	// TODO: Verify that other aspects of the CSR are appropriate
+	err = VerifyCSR(csr)
 	if err != nil {
-		return malformedRequestError()
+		return unauthorizedError("Invalid signature on CSR")
 	}
-	// TODO Verify the CSR
-	// TODO Verify that the CSR is authorized by the signature
-	// TODO Create the certificate
+
+	// Validate that authorization key is authorized for all domains
+	names := csr.DNSNames
+	if len(csr.Subject.CommonName) > 0 {
+		names = append(names, csr.Subject.CommonName)
+	}
+	thumbprint := message.Signature.Jwk.Thumbprint
+	for _, name := range names {
+		_, ok := acme.authorizedKeys[name][thumbprint]
+		if !ok {
+			return unauthorizedError(fmt.Sprintf("Key not authorized for name %s", name))
+		}
+	}
+
+	// Create the certificate
+	cert, err := newEECertificate(csr.PublicKey, names, acme.certificate, acme.privateKey)
+	if err != nil {
+		return internalServerError()
+	}
 
 	return AcmeMessage{
 		Type:        "certificate",
-		Certificate: randomString(512),
+		Certificate: b64enc(cert),
+		Chain:       []string{b64enc(acme.derCertificate)},
 	}
 }
 
 func (acme *AcmeWebAPI) handleRevocationRequest(message AcmeMessage) AcmeMessage {
-	// TODO Verify signature
-	// TODO Check that certificate is one of ours, and associated with the signing key
+	// Verify signature
+	der, err := b64dec(message.Certificate)
+	if err != nil {
+		return malformedRequestError()
+	}
+	err = message.Signature.Verify(der)
+	if err != nil {
+		return unauthorizedError("Signature failed to validate")
+	}
+
+	// Parse the certificate
+	if isEmpty(message.Certificate) {
+		return malformedRequestError()
+	}
+	certs, err := x509.ParseCertificates(der)
+	if err != nil || len(certs) == 0 {
+		return malformedRequestError()
+	}
+	cert := certs[0]
+
+	// Validate that authorization key is authorized for all domains
+	names := cert.DNSNames
+	if len(cert.Subject.CommonName) > 0 {
+		names = append(names, cert.Subject.CommonName)
+	}
+	thumbprint := message.Signature.Jwk.Thumbprint
+	for _, name := range names {
+		_, ok := acme.authorizedKeys[name][thumbprint]
+		if !ok {
+			return unauthorizedError(fmt.Sprintf("Key not authorized for name %s", name))
+		}
+	}
 
 	acme.revocationStatus[message.Certificate] = true
 	return AcmeMessage{
@@ -257,9 +366,6 @@ func (acme *AcmeWebAPI) handleAcmeMessage(message AcmeMessage) AcmeMessage {
 }
 
 func (acme AcmeWebAPI) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	// Initialize state
-	acme.Init()
-
 	// Check that the method is POST
 	if request.Method != "POST" {
 		DEBUG("Failing due to inability to bad method")
