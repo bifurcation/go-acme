@@ -282,7 +282,22 @@ const ENABLE_WEB = true
 func TestWebAPI(t *testing.T) {
 	if ENABLE_WEB {
 		fmt.Println("--> TestWebAPI")
-		http.Handle("/acme", NewAcmeWebAPI())
+
+		// Create the components
+		wfe := NewWebFrontEndImpl()
+		ra := NewRegistrationAuthorityImpl()
+		va := NewValidationAuthorityImpl()
+		ca := NewCertificateAuthorityImpl()
+
+		// Wire them up
+		wfe.RA = &ra
+		ra.WFE = &wfe
+		ra.VA = &va
+		ra.CA = &ca
+		va.RA = &ra
+
+		// Go!
+		http.Handle("/acme", wfe)
 		http.ListenAndServe("localhost:4000", nil)
 	}
 }

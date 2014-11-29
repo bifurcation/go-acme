@@ -12,9 +12,18 @@ import (
 	"encoding/base64"
 	"errors"
 	"hash"
+	"log"
 	"math/big"
 	"strings"
 )
+
+const ENABLE_DEBUG = true
+
+func DEBUG(message interface{}) {
+	if ENABLE_DEBUG {
+		log.Println(message)
+	}
+}
 
 // Errors
 

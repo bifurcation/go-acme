@@ -5,9 +5,18 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"time"
 )
+
+type CertificateAuthorityImpl struct {
+	certificates     map[string]x509.Certificate
+	revocationStatus map[string]bool // Serial -> boolean
+	privateKey       interface{}
+	certificate      x509.Certificate
+	derCertificate   []byte
+}
 
 var (
 	serialNumberBits        = uint(64)
@@ -41,10 +50,11 @@ func newSerialNumber() *big.Int {
 	return serialNumber
 }
 
-func newRoot() (interface{}, x509.Certificate, []byte) {
+func NewCertificateAuthorityImpl() CertificateAuthorityImpl {
 	// Generate a key pair
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil { /* XXX do something? */
+	if err != nil {
+		// XXX do something?
 	}
 
 	// Sign the certificate
@@ -63,10 +73,20 @@ func newRoot() (interface{}, x509.Certificate, []byte) {
 		// XXX do something
 	}
 
-	return priv, *certs[0], der
+	return CertificateAuthorityImpl{
+		certificates:     make(map[string]x509.Certificate),
+		revocationStatus: make(map[string]bool),
+		privateKey:       priv,
+		certificate:      *certs[0],
+		derCertificate:   der,
+	}
 }
 
-func newEECertificate(publicKey interface{}, domains []string, caCert x509.Certificate, caKey interface{}) ([]byte, error) {
+func (ca *CertificateAuthorityImpl) CACertificate() []byte {
+	return ca.derCertificate
+}
+
+func (ca *CertificateAuthorityImpl) IssueCertificate(csr x509.CertificateRequest) ([]byte, error) {
 	template := eeCertificateTemplate
 
 	// Set serial
@@ -77,9 +97,21 @@ func newEECertificate(publicKey interface{}, domains []string, caCert x509.Certi
 	template.NotAfter = template.NotBefore.Add(oneYear)
 
 	// Set hostnames
+	domains := csr.DNSNames
+	if len(csr.Subject.CommonName) > 0 {
+		domains = append(domains, csr.Subject.CommonName)
+	}
+	if len(domains) == 0 {
+		return []byte{}, errors.New("No names provided for certificate")
+	}
 	template.Subject = pkix.Name{CommonName: domains[0]}
 	template.DNSNames = domains
 
 	// Sign
-	return x509.CreateCertificate(rand.Reader, &template, &caCert, publicKey, caKey)
+	return x509.CreateCertificate(rand.Reader, &template, &ca.certificate, csr.PublicKey, ca.privateKey)
+}
+
+func (ca *CertificateAuthorityImpl) RevokeCertificate(cert x509.Certificate) error {
+	// TODO
+	return nil
 }

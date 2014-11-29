@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+type ValidationAuthorityImpl struct {
+	RA RegistrationAuthority
+}
+
+func NewValidationAuthorityImpl() ValidationAuthorityImpl {
+	return ValidationAuthorityImpl{}
+}
+
 type AcmeChallenge struct {
 	Type  string `json:"type"`
 	Token string `json:"token"` // SimpleHTTPS
@@ -43,12 +51,12 @@ func DvsniChallenge() AcmeChallenge {
 	}
 }
 
-func ValidateSimpleHTTPS(acme *AcmeWebAPI, deferralToken string, identifier string, challenge AcmeChallenge, response AcmeResponse) {
+func (va ValidationAuthorityImpl) validateSimpleHTTPS(token string, identifier string, challenge AcmeChallenge, response AcmeResponse) {
 	var responseMessage AcmeMessage
 
 	if len(response.Path) == 0 {
 		responseMessage = unauthorizedError("malformed simpleHttps response")
-		acme.ProvideDeferredResponse(deferralToken, responseMessage)
+		va.RA.HandleValidationResult(token, responseMessage)
 		return
 	}
 
@@ -64,14 +72,14 @@ func ValidateSimpleHTTPS(acme *AcmeWebAPI, deferralToken string, identifier stri
 
 	if err != nil {
 		responseMessage = unauthorizedError("Unable to fetch simpleHttps URL")
-		acme.ProvideDeferredResponse(deferralToken, responseMessage)
+		va.RA.HandleValidationResult(token, responseMessage)
 		return
 	} else if httpResponse.StatusCode == 200 {
 		// Read body & test
 		body, err := ioutil.ReadAll(httpResponse.Body)
 		if err != nil {
 			responseMessage = unauthorizedError("Unable to read simpleHttps response body")
-			acme.ProvideDeferredResponse(deferralToken, responseMessage)
+			va.RA.HandleValidationResult(token, responseMessage)
 			return
 		}
 
@@ -80,35 +88,34 @@ func ValidateSimpleHTTPS(acme *AcmeWebAPI, deferralToken string, identifier stri
 				Type:       "authorization",
 				Identifier: identifier,
 			}
-			acme.ProvideDeferredResponse(deferralToken, responseMessage)
+			va.RA.HandleValidationResult(token, responseMessage)
 			return
 		} else {
 			responseMessage = unauthorizedError(fmt.Sprintf("Unrecognized body [%s], expected [%s]", string(body), challenge.Token))
-			acme.ProvideDeferredResponse(deferralToken, responseMessage)
+			va.RA.HandleValidationResult(token, responseMessage)
 			return
 		}
 	}
 
 	responseMessage = unauthorizedError(fmt.Sprintf("HTTP error on simpleHttps: %d", httpResponse.StatusCode))
+	va.RA.HandleValidationResult(token, responseMessage)
 }
 
-func ValidateDvsni(acme *AcmeWebAPI, deferralToken string, identifier string, challenge AcmeChallenge, response AcmeResponse) {
+func (va ValidationAuthorityImpl) validateDvsni(token string, identifier string, challenge AcmeChallenge, response AcmeResponse) {
 	var responseMessage AcmeMessage
-	defer acme.ProvideDeferredResponse(deferralToken, responseMessage)
-
 	const DVSNI_SUFFIX = ".acme.invalid"
 	nonceName := challenge.Nonce + DVSNI_SUFFIX
 
 	R, err := b64dec(challenge.R)
 	if err != nil {
 		responseMessage = internalServerError()
-		acme.ProvideDeferredResponse(deferralToken, responseMessage)
+		va.RA.HandleValidationResult(token, responseMessage)
 		return
 	}
 	S, err := b64dec(response.S)
 	if err != nil {
 		responseMessage = malformedRequestError()
-		acme.ProvideDeferredResponse(deferralToken, responseMessage)
+		va.RA.HandleValidationResult(token, responseMessage)
 		return
 	}
 	RS := append(R, S...)
@@ -129,7 +136,7 @@ func ValidateDvsni(acme *AcmeWebAPI, deferralToken string, identifier string, ch
 
 	if err != nil {
 		responseMessage = unauthorizedError("Unable to connect to DVSNI server")
-		acme.ProvideDeferredResponse(deferralToken, responseMessage)
+		va.RA.HandleValidationResult(token, responseMessage)
 		return
 	}
 
@@ -137,7 +144,7 @@ func ValidateDvsni(acme *AcmeWebAPI, deferralToken string, identifier string, ch
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
 		responseMessage = unauthorizedError("DVSNI server provided no certificate")
-		acme.ProvideDeferredResponse(deferralToken, responseMessage)
+		va.RA.HandleValidationResult(token, responseMessage)
 		return
 	}
 	for _, name := range certs[0].DNSNames {
@@ -146,40 +153,43 @@ func ValidateDvsni(acme *AcmeWebAPI, deferralToken string, identifier string, ch
 				Type:       "authorization",
 				Identifier: identifier,
 			}
-			acme.ProvideDeferredResponse(deferralToken, responseMessage)
+			va.RA.HandleValidationResult(token, responseMessage)
 			return
 		}
 	}
 
 	responseMessage = unauthorizedError("DVSNI certificate did not contain proper name")
-	acme.ProvideDeferredResponse(deferralToken, responseMessage)
+	va.RA.HandleValidationResult(token, responseMessage)
 }
 
-func nullResponse(response AcmeResponse) bool {
-	// null values unmarshal to default values
-	return len(response.Type) == 0
-}
-
-func ValidateChallenges(acme *AcmeWebAPI, deferralToken string, identifier string, challenges []AcmeChallenge, responses []AcmeResponse) {
-	// Pause for 2sec to allow the other sie to start up
+func (va ValidationAuthorityImpl) Validate(identifier string, challenges []AcmeChallenge, responses []AcmeResponse) (string, error) {
+	// Pause for 2sec to allow the other side to start up
 	time.Sleep(2 * time.Second)
+
+	// Make a new validation/deferral token
+	token := newToken()
 
 	// Validate the first challenge we see of a type we support
 	for i := range challenges {
-		if nullResponse(responses[i]) {
+		// Make sure we don't go past the end of responses
+		if i > len(responses) {
+			break
+		}
+
+		// null values unmarshal to default values
+		if len(responses[i].Type) == 0 {
 			continue
 		}
 
 		switch responses[i].Type {
 		case "simpleHttps":
-			ValidateSimpleHTTPS(acme, deferralToken, identifier, challenges[i], responses[i])
-			return
+			go va.validateSimpleHTTPS(token, identifier, challenges[i], responses[i])
+			return token, nil
 		case "dvsni":
-			ValidateDvsni(acme, deferralToken, identifier, challenges[i], responses[i])
-			return
+			go va.validateDvsni(token, identifier, challenges[i], responses[i])
+			return token, nil
 		}
 	}
 
-	acme.ProvideDeferredResponse(deferralToken,
-		unauthorizedError("No supported challenge/response pairs found"))
+	return "", NotFoundError("No suitable challenges found")
 }
