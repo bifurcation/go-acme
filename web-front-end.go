@@ -1,13 +1,17 @@
 package acme
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 )
 
 type WebFrontEndImpl struct {
 	RA                RegistrationAuthority
+	VA                ValidationAuthority
+	SA                StorageAuthority
 	deferredResponses map[string]AcmeMessage
 }
 
@@ -86,15 +90,126 @@ func (wfe WebFrontEndImpl) ServeHTTP(response http.ResponseWriter, request *http
 	var reply AcmeMessage
 	switch message.Type {
 	case "challengeRequest":
-		reply = wfe.RA.HandleChallengeRequest(message)
+		authz, err := wfe.RA.NewAuthorization(AuthorizationRequest{
+			Identifier: AcmeIdentifier{
+				Type:  "domain",
+				Value: message.Identifier,
+			},
+		}, JsonWebKey{})
+
+		if err != nil {
+			fmt.Printf("error from NewAuthorization(): %+v\n", err)
+			reply = internalServerError()
+		}
+
+		challenges := make([]AcmeChallenge, len(authz.Validations))
+		for i, val := range authz.Validations {
+			challenges[i] = val.Challenge
+		}
+
+		reply = AcmeMessage{
+			Type:       "challenge",
+			Nonce:      string(authz.ID),
+			Challenges: challenges,
+		}
 	case "authorizationRequest":
-		reply = wfe.RA.HandleAuthorizationRequest(message)
+		clientNonce := message.Nonce
+		obj, err := wfe.SA.Get(Token(clientNonce))
+		if err != nil {
+			reply = notFoundError()
+			break
+		}
+		authz := obj.(Authorization)
+		identifier := authz.Identifier.Value
+
+		// Validate signature
+		clientNonceInput, err := b64dec(clientNonce)
+		if err != nil {
+			reply = malformedRequestError()
+			break
+		}
+		err = message.Signature.Verify(append([]byte(identifier), clientNonceInput...))
+		if err != nil {
+			reply = unauthorizedError("Signature failed to validate")
+			break
+		}
+
+		// Update authorization with JWK and responses
+		authz.Key = message.Signature.Jwk
+		if len(message.Responses) != len(authz.Validations) {
+			reply = malformedRequestError()
+			break
+		}
+		chosen := false
+		var chosenValidation Validation
+		for i, response := range message.Responses {
+			authz.Validations[i].Response = response
+
+			if !chosen && len(response.Type) > 0 {
+				chosen = true
+				chosenValidation = authz.Validations[i]
+			}
+		}
+		if !chosen {
+			reply = malformedRequestError()
+			break
+		}
+		err = wfe.SA.Update(authz.ID, authz)
+		// XXX ignoring error
+
+		// Kick off validation
+		err = wfe.VA.UpdateValidation(chosenValidation)
+		reply = AcmeMessage{
+			Type:  "defer",
+			Token: string(authz.ID),
+		}
 	case "certificateRequest":
-		reply = wfe.RA.HandleCertificateRequest(message)
+		// Verify the signature
+		csrBytes, err := b64dec(message.Csr)
+		if err != nil {
+			reply = malformedRequestError()
+			break
+		}
+		err = message.Signature.Verify(csrBytes)
+		if err != nil {
+			reply = unauthorizedError("Signature failed to validate")
+			break
+		}
+
+		// Parse the CSR
+		if len(message.Csr) == 0 {
+			reply = malformedRequestError()
+			break
+		}
+		csr, err := x509.ParseCertificateRequest(csrBytes)
+		if err != nil {
+			reply = malformedRequestError()
+			break
+		}
+
+		cert, err := wfe.RA.NewCertificate(CertificateRequest{CSR: *csr}, message.Signature.Jwk)
+		if err != nil {
+			reply = internalServerError()
+			break
+		}
+
+		reply = AcmeMessage{
+			Type:        "certificate",
+			Certificate: b64enc(cert.DER),
+		}
 	case "revocationRequest":
-		reply = wfe.RA.HandleRevocationRequest(message)
+		// TODO Implement revocation
+		reply = notSupportedError()
 	case "statusRequest":
-		reply = wfe.handleStatusRequest(message)
+		reply, ok := wfe.deferredResponses[message.Token]
+		if !ok {
+			reply = notFoundError()
+			break
+		}
+
+		if reply.Type != "defer" {
+			delete(wfe.deferredResponses, message.Token)
+		}
 	default:
 		reply = AcmeMessage{
 			Type:    "error",
@@ -114,19 +229,21 @@ func (wfe WebFrontEndImpl) ServeHTTP(response http.ResponseWriter, request *http
 	response.Write(jsonReply)
 }
 
-func (wfe *WebFrontEndImpl) handleStatusRequest(message AcmeMessage) AcmeMessage {
-	response, ok := wfe.deferredResponses[message.Token]
-	if !ok {
-		return notFoundError()
+func (wfe WebFrontEndImpl) OnAuthorizationUpdate(authz Authorization) {
+	token := string(authz.ID)
+	_, ok := wfe.deferredResponses[token]
+	if !ok || authz.Status == StatusPending {
+		return
 	}
 
-	if response.Type != "defer" {
-		delete(wfe.deferredResponses, message.Token)
+	switch authz.Status {
+	case StatusValid:
+		wfe.deferredResponses[token] = AcmeMessage{
+			Type:       "authorization",
+			Identifier: authz.Identifier.Value,
+		}
+
+	case StatusInvalid:
+		wfe.deferredResponses[token] = unauthorizedError("Domain authorization failed")
 	}
-
-	return response
-}
-
-func (wfe WebFrontEndImpl) ProvideDeferredResponse(token string, message AcmeMessage) {
-	wfe.deferredResponses[token] = message
 }

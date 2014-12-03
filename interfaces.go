@@ -35,25 +35,49 @@ type AcmeMessage struct {
 
 type WebFrontEnd interface {
 	ServeHTTP(http.ResponseWriter, *http.Request)
-	ProvideDeferredResponse(string, AcmeMessage)
+
+	// Internal messages
+	OnAuthorizationUpdate(Authorization)
 }
 
 type RegistrationAuthority interface {
-	HandleChallengeRequest(AcmeMessage) AcmeMessage
-	HandleAuthorizationRequest(AcmeMessage) AcmeMessage
-	HandleCertificateRequest(AcmeMessage) AcmeMessage
-	HandleRevocationRequest(AcmeMessage) AcmeMessage
-	HandleValidationResult(string, AcmeMessage)
+	// Web events
+	// * POST to new-auth URI
+	// * POST to new-cert URI
+	// * POST to auth URI ~> not in -00
+	// * POST to cert URI == revokeCertificate
+	NewAuthorization(AuthorizationRequest, JsonWebKey) (Authorization, error)
+	NewCertificate(CertificateRequest, JsonWebKey) (Certificate, error)
+	//UpdateAuthorization(Token, UpdateRequest, JsonWebKey) error
+	//UpdateCertificate(Token, UpdateRequest, JsonWebKey) error
+
+	// Internal messages
+	OnValidationUpdate(Validation)
 }
 
 type ValidationAuthority interface {
-	Validate(string, []AcmeChallenge, []AcmeResponse) (string, error)
+	// POST to validation URI
+	UpdateValidation(Validation) error
 }
 
 type CertificateAuthority interface {
 	CACertificate() []byte
 	IssueCertificate(x509.CertificateRequest) ([]byte, error)
 	RevokeCertificate(x509.Certificate) error
+}
+
+type StorageReader interface {
+	Get(Token) (interface{}, error)
+}
+
+type StorageWriter interface {
+	Put(interface{}) (Token, error)
+	Update(Token, interface{}) error
+}
+
+type StorageAuthority interface {
+	StorageReader
+	StorageWriter
 }
 
 // Implemented elsewhere:

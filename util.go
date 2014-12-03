@@ -27,10 +27,16 @@ func DEBUG(message interface{}) {
 
 // Errors
 
+type NotSupportedError string
+type MalformedRequestError string
+type UnauthorizedError string
 type NotFoundError string
 type SyntaxError string
 type SignatureValidationError string
 
+func (e NotSupportedError) Error() string        { return string(e) }
+func (e MalformedRequestError) Error() string    { return string(e) }
+func (e UnauthorizedError) Error() string        { return string(e) }
 func (e NotFoundError) Error() string            { return string(e) }
 func (e SyntaxError) Error() string              { return string(e) }
 func (e SignatureValidationError) Error() string { return string(e) }

@@ -288,12 +288,15 @@ func TestWebAPI(t *testing.T) {
 		ra := NewRegistrationAuthorityImpl()
 		va := NewValidationAuthorityImpl()
 		ca := NewCertificateAuthorityImpl()
+		sa := NewSimpleStorageAuthorityImpl()
 
 		// Wire them up
 		wfe.RA = &ra
+		wfe.SA = &sa
+		wfe.VA = &va
 		ra.WFE = &wfe
-		ra.VA = &va
 		ra.CA = &ca
+		ra.SA = &sa
 		va.RA = &ra
 
 		// Go!
