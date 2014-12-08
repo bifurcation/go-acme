@@ -1,4 +1,4 @@
-package acme
+package anvil
 
 import (
 	"bytes"
@@ -37,14 +37,14 @@ func DvsniChallenge() AcmeChallenge {
 	}
 }
 
-func (va ValidationAuthorityImpl) validateSimpleHTTPS(val Validation) {
-	identifier := val.Identifier.Value
-	challenge := val.Challenge
-	response := val.Response
+func (va ValidationAuthorityImpl) validateSimpleHTTPS(authz Authorization, index int) {
+	identifier := authz.Validations[index].Identifier.Value
+	challenge := authz.Validations[index].Challenge
+	response := authz.Validations[index].Response
 
 	if len(response.Path) == 0 {
-		val.Status = StatusInvalid
-		va.RA.OnValidationUpdate(val)
+		authz.Validations[index].Status = StatusInvalid
+		va.RA.OnValidationUpdate(authz)
 		return
 	}
 
@@ -53,7 +53,12 @@ func (va ValidationAuthorityImpl) validateSimpleHTTPS(val Validation) {
 	//url := fmt.Sprintf("https://%s/.well-known/acme-challenge/%s", identifier, response.Path)
 
 	httpRequest, err := http.NewRequest("GET", url, nil)
-	// XXX Ignore err here.  What could go wrong?
+	if err != nil {
+		authz.Validations[index].Status = StatusInvalid
+		va.RA.OnValidationUpdate(authz)
+		return
+	}
+
 	httpRequest.Host = identifier
 	client := http.Client{Timeout: 5 * time.Second}
 	httpResponse, err := client.Do(httpRequest)
@@ -62,40 +67,40 @@ func (va ValidationAuthorityImpl) validateSimpleHTTPS(val Validation) {
 		// Read body & test
 		body, err := ioutil.ReadAll(httpResponse.Body)
 		if err != nil {
-			val.Status = StatusInvalid
-			va.RA.OnValidationUpdate(val)
+			authz.Validations[index].Status = StatusInvalid
+			va.RA.OnValidationUpdate(authz)
 			return
 		}
 
 		if bytes.Compare(body, []byte(challenge.Token)) == 0 {
-			val.Status = StatusValid
-			va.RA.OnValidationUpdate(val)
+			authz.Validations[index].Status = StatusValid
+			va.RA.OnValidationUpdate(authz)
 			return
 		}
 	}
 
-	val.Status = StatusInvalid
-	va.RA.OnValidationUpdate(val)
+	authz.Validations[index].Status = StatusInvalid
+	va.RA.OnValidationUpdate(authz)
 }
 
-func (va ValidationAuthorityImpl) validateDvsni(val Validation) {
-	// identifier := val.Identifier.Value // see below
-	challenge := val.Challenge
-	response := val.Response
+func (va ValidationAuthorityImpl) validateDvsni(authz Authorization, index int) {
+	// identifier := val.Identifier.Value // XXX see below
+	challenge := authz.Validations[index].Challenge
+	response := authz.Validations[index].Response
 
 	const DVSNI_SUFFIX = ".acme.invalid"
 	nonceName := challenge.Nonce + DVSNI_SUFFIX
 
 	R, err := b64dec(challenge.R)
 	if err != nil {
-		val.Status = StatusInvalid
-		va.RA.OnValidationUpdate(val)
+		authz.Validations[index].Status = StatusInvalid
+		va.RA.OnValidationUpdate(authz)
 		return
 	}
 	S, err := b64dec(response.S)
 	if err != nil {
-		val.Status = StatusInvalid
-		va.RA.OnValidationUpdate(val)
+		authz.Validations[index].Status = StatusInvalid
+		va.RA.OnValidationUpdate(authz)
 		return
 	}
 	RS := append(R, S...)
@@ -115,39 +120,42 @@ func (va ValidationAuthorityImpl) validateDvsni(val Validation) {
 	})
 
 	if err != nil {
-		val.Status = StatusInvalid
-		va.RA.OnValidationUpdate(val)
+		authz.Validations[index].Status = StatusInvalid
+		va.RA.OnValidationUpdate(authz)
 		return
 	}
 
 	// Check that zName is a dNSName SAN in the server's certificate
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
-		val.Status = StatusInvalid
-		va.RA.OnValidationUpdate(val)
+		authz.Validations[index].Status = StatusInvalid
+		va.RA.OnValidationUpdate(authz)
 		return
 	}
 	for _, name := range certs[0].DNSNames {
 		if name == zName {
-			val.Status = StatusValid
-			va.RA.OnValidationUpdate(val)
+			authz.Validations[index].Status = StatusValid
+			va.RA.OnValidationUpdate(authz)
 			return
 		}
 	}
 
-	val.Status = StatusInvalid
-	va.RA.OnValidationUpdate(val)
+	authz.Validations[index].Status = StatusInvalid
+	va.RA.OnValidationUpdate(authz)
 }
 
-func (va ValidationAuthorityImpl) UpdateValidation(val Validation) error {
-	switch val.Type {
-	case "simpleHttps":
-		go va.validateSimpleHTTPS(val)
-		return nil
-	case "dvsni":
-		go va.validateDvsni(val)
-		return nil
+func (va ValidationAuthorityImpl) UpdateValidations(authz Authorization) error {
+	// Select the first supported validation method
+	for i, val := range authz.Validations {
+		switch val.Type {
+		case "simpleHttps":
+			go va.validateSimpleHTTPS(authz, i)
+			return nil
+		case "dvsni":
+			go va.validateDvsni(authz, i)
+			return nil
+		}
 	}
 
-	return NotSupportedError("Unsupported validation method " + val.Type)
+	return NotSupportedError("No supported validation method")
 }

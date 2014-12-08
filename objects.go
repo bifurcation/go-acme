@@ -1,4 +1,4 @@
-package acme
+package anvil
 
 import (
 	"crypto/x509"
@@ -51,7 +51,6 @@ type UpdateRequest struct{}
 
 type Validation struct {
 	ID         Token
-	AuthID     Token
 	Identifier AcmeIdentifier
 	Status     AcmeStatus
 	Type       string
@@ -76,4 +75,5 @@ type Certificate struct {
 	PEM      string
 	Chain    []Certificate
 	Download url.URL
+	Status   AcmeStatus
 }

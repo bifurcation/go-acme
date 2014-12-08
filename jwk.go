@@ -1,4 +1,4 @@
-package acme
+package anvil
 
 import (
 	"crypto/ecdsa"
@@ -55,13 +55,15 @@ func name2curve(name string) (elliptic.Curve, error) {
 }
 
 func curve2name(curve elliptic.Curve) (string, error) {
-	// XXX DANGER ASSUMES ONE CURVE PER BIT SIZE
-	switch curve.Params().BitSize {
-	case 256:
+	// XXX Assumes one curve per base field.  This is currently true for
+	// the built-in curves in the 'elliptic' package
+	p := curve.Params().P
+	switch {
+	case p.Cmp(elliptic.P256().Params().P) == 0:
 		return "P-256", nil
-	case 384:
+	case p.Cmp(elliptic.P384().Params().P) == 0:
 		return "P-384", nil
-	case 521:
+	case p.Cmp(elliptic.P521().Params().P) == 0:
 		return "P-521", nil
 	}
 

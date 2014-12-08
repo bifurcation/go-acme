@@ -1,4 +1,4 @@
-package acme
+package anvil
 
 import (
 	"crypto"
@@ -33,6 +33,7 @@ type UnauthorizedError string
 type NotFoundError string
 type SyntaxError string
 type SignatureValidationError string
+type CertificateIssuanceError string
 
 func (e NotSupportedError) Error() string        { return string(e) }
 func (e MalformedRequestError) Error() string    { return string(e) }
@@ -40,6 +41,7 @@ func (e UnauthorizedError) Error() string        { return string(e) }
 func (e NotFoundError) Error() string            { return string(e) }
 func (e SyntaxError) Error() string              { return string(e) }
 func (e SignatureValidationError) Error() string { return string(e) }
+func (e CertificateIssuanceError) Error() string { return string(e) }
 
 // Base64 functions
 
@@ -69,7 +71,7 @@ func b64dec(x string) ([]byte, error) {
 
 func randomString(length int) string {
 	b := make([]byte, length)
-	rand.Read(b) // XXX Ignoring errors as unlikely
+	rand.Read(b) // NOTE: Ignoring errors
 	return b64enc(b)
 }
 
@@ -137,4 +139,63 @@ func VerifyCSR(csr *x509.CertificateRequest) error {
 	}
 
 	return errors.New("Unsupported CSR signing algorithm")
+}
+
+type LegacyAcmeSignature struct {
+	Alg   string     `json:"alg,omitempty"`
+	Sig   string     `json:"sig,omitempty"`
+	Nonce string     `json:"nonce,omitempty"`
+	Jwk   JsonWebKey `json:"jwk,omitempty"`
+}
+
+type InvalidSignatureError struct {
+	reason string
+}
+
+func (e InvalidSignatureError) Error() string {
+	return "InvalidSignatureError: " + e.reason
+}
+
+func (sig LegacyAcmeSignature) Verify(payload []byte) error {
+	if sig.Jwk.KeyType != "RSA" {
+		return InvalidSignatureError{"kty == " + sig.Jwk.KeyType + " != RSA"}
+	} else if sig.Jwk.Rsa == nil {
+		return InvalidSignatureError{"Not RSA"}
+	}
+
+	// Compute the signature input
+	nonceInput, err := b64dec(sig.Nonce)
+	if err != nil {
+		return InvalidSignatureError{"b64 decode error on nonce"}
+	}
+	signatureInput := append(nonceInput, payload...)
+
+	// Import the signature value
+	signature, err := b64dec(sig.Sig)
+	if err != nil {
+		return InvalidSignatureError{"b64 decode error on signature"}
+	}
+
+	// Compute the message digest
+	// Hash the payload
+	var hashID crypto.Hash
+	var hash hash.Hash
+	switch sig.Alg {
+	case "RS256":
+		hashID = crypto.SHA256
+		hash = sha256.New()
+	case "RS384":
+		hashID = crypto.SHA384
+		hash = sha512.New384()
+	case "RS512":
+		hashID = crypto.SHA512
+		hash = sha512.New()
+	default:
+		return InvalidSignatureError{"unknown algorithm " + sig.Alg}
+	}
+	hash.Write(signatureInput)
+	inputHash := hash.Sum(nil)
+
+	// Check the signature
+	return rsa.VerifyPKCS1v15(sig.Jwk.Rsa, hashID, inputHash, signature)
 }

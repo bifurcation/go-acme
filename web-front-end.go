@@ -1,4 +1,4 @@
-package acme
+package anvil
 
 import (
 	"crypto/x509"
@@ -19,6 +19,36 @@ func NewWebFrontEndImpl() WebFrontEndImpl {
 	return WebFrontEndImpl{
 		deferredResponses: make(map[string]AcmeMessage),
 	}
+}
+
+// ACME message struct
+
+type AcmeMessage struct {
+	// XXX For simplicity, we just put all the fields in here.
+	//     This could be a problem if we have fields with the same name
+	//     and different types.  If that happens, we'll need to split out
+	//     types and do a bunch of reserialization.
+	Type         string              `json:"type"`                   // Base
+	Error        string              `json:"error,omitempty"`        // error
+	Message      string              `json:"message,omitempty"`      //
+	MoreInfo     string              `json:"moreInfo,omitempty"`     //
+	Token        string              `json:"token,omitempty"`        // defer
+	Interval     float64             `json:"interval,omitempty"`     //
+	Identifier   string              `json:"identifier,omitempty"`   // challengeRequest
+	SessionID    string              `json:"sessionID,omitempty"`    // challenge
+	Nonce        string              `json:"nonce,omitempty"`        //
+	Challenges   []AcmeChallenge     `json:"challenges,omitempty"`   //
+	Combinations [][]int             `json:"combinations,omitempty"` //
+	Signature    LegacyAcmeSignature `json:"signature,omitempty"`    // authorizationRequest
+	Responses    []AcmeResponse      `json:"responses,omitempty"`    //
+	Contact      []string            `json:"contact,omitempty"`      //
+	RecoverToken string              `json:"recoverToken,omitempty"` // authorization
+	Jwk          JsonWebKey          `json:"jwk,omitempty"`          //
+	Csr          string              `json:"csr,omitempty"`          // certificateRequest
+	Certificate  string              `json:"certificate,omitempty"`  // certificate
+	Chain        []string            `json:"chain,omitempty"`        //
+	Refresh      string              `json:"refresh,omitempty"`      //
+	// No new fields for statusRequest, revocationRequest, revocation
 }
 
 // Quick error factories
@@ -113,6 +143,7 @@ func (wfe WebFrontEndImpl) ServeHTTP(response http.ResponseWriter, request *http
 			Challenges: challenges,
 		}
 	case "authorizationRequest":
+		// Look up the authorization from the client nonce
 		clientNonce := message.Nonce
 		obj, err := wfe.SA.Get(Token(clientNonce))
 		if err != nil {
@@ -122,7 +153,7 @@ func (wfe WebFrontEndImpl) ServeHTTP(response http.ResponseWriter, request *http
 		authz := obj.(Authorization)
 		identifier := authz.Identifier.Value
 
-		// Validate signature
+		// Verify signature
 		clientNonceInput, err := b64dec(clientNonce)
 		if err != nil {
 			reply = malformedRequestError()
@@ -140,25 +171,17 @@ func (wfe WebFrontEndImpl) ServeHTTP(response http.ResponseWriter, request *http
 			reply = malformedRequestError()
 			break
 		}
-		chosen := false
-		var chosenValidation Validation
 		for i, response := range message.Responses {
 			authz.Validations[i].Response = response
-
-			if !chosen && len(response.Type) > 0 {
-				chosen = true
-				chosenValidation = authz.Validations[i]
-			}
-		}
-		if !chosen {
-			reply = malformedRequestError()
-			break
 		}
 		err = wfe.SA.Update(authz.ID, authz)
-		// XXX ignoring error
+		if err != nil {
+			reply = internalServerError()
+			break
+		}
 
 		// Kick off validation
-		err = wfe.VA.UpdateValidation(chosenValidation)
+		err = wfe.VA.UpdateValidations(authz)
 		reply = AcmeMessage{
 			Type:  "defer",
 			Token: string(authz.ID),
@@ -198,8 +221,30 @@ func (wfe WebFrontEndImpl) ServeHTTP(response http.ResponseWriter, request *http
 			Certificate: b64enc(cert.DER),
 		}
 	case "revocationRequest":
-		// TODO Implement revocation
-		reply = notSupportedError()
+		// Verify the signature
+		certBytes, err := b64dec(message.Certificate)
+		if err != nil {
+			reply = malformedRequestError()
+			break
+		}
+		err = message.Signature.Verify(certBytes)
+		if err != nil {
+			reply = unauthorizedError("Signature failed to validate")
+			break
+		}
+
+		certs, err := x509.ParseCertificates(certBytes)
+		if len(certs) < 1 {
+			reply = malformedRequestError()
+			break
+		}
+		err = wfe.RA.RevokeCertificate(*certs[0])
+		if err != nil {
+			reply = internalServerError()
+			break
+		}
+
+		reply = AcmeMessage{Type: "revocation"}
 	case "statusRequest":
 		reply, ok := wfe.deferredResponses[message.Token]
 		if !ok {
