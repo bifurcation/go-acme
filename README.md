@@ -109,4 +109,6 @@ TODO
 ----
 
 * Add messaging layer
+* Add authority monitor
+* Factor out policy layer (e.g., selection of challenges)
 * Add persistent storage
