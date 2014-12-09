@@ -43,6 +43,8 @@ Files
 * `jwk.go` - An object representation for JSON Web Key objects
 * `anvil_test.go` - Unit tests
 
+If you want to run the CA, say to test client compatibility, just run the tests (`go test`).  The last test starts up the CA and runs until the Go test harness kills it (a couple of minutes).
+
 
 ACME Processing
 ---------------
