@@ -6,92 +6,256 @@
 package anvil
 
 import (
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"github.com/bifurcation/gose"
 	"io/ioutil"
 	"net/http"
+	"regexp"
 )
 
 type WebFrontEndImpl struct {
-	RA                RegistrationAuthority
-	VA                ValidationAuthority
-	SA                StorageAuthority
-	deferredResponses map[string]AcmeMessage
+	RA RegistrationAuthority
+	VA ValidationAuthority
+	SA StorageAuthority
+
+	// URL configuration parameters
+	baseURL   string
+	authzBase string
+	certBase  string
 }
 
 func NewWebFrontEndImpl() WebFrontEndImpl {
-	return WebFrontEndImpl{
-		deferredResponses: make(map[string]AcmeMessage),
-	}
-}
+	wfe := WebFrontEndImpl{}
 
-// ACME message struct
+	// TODO: Store HTTP config info, e.g., base URL
+	// IDs get appended to these to make URLs for authz
+	// objects and certificates
+	wfe.baseURL = "http://localhost:4000/acme/" // XXX Set this to where the server will be!!!
+	wfe.authzBase = wfe.baseURL + "authz/"
+	wfe.certBase = wfe.baseURL + "cert/"
 
-type AcmeMessage struct {
-	// XXX For simplicity, we just put all the fields in here.
-	//     This could be a problem if we have fields with the same name
-	//     and different types.  If that happens, we'll need to split out
-	//     types and do a bunch of reserialization.
-	Type         string              `json:"type"`                   // Base
-	Error        string              `json:"error,omitempty"`        // error
-	Message      string              `json:"message,omitempty"`      //
-	MoreInfo     string              `json:"moreInfo,omitempty"`     //
-	Token        string              `json:"token,omitempty"`        // defer
-	Interval     float64             `json:"interval,omitempty"`     //
-	Identifier   string              `json:"identifier,omitempty"`   // challengeRequest
-	SessionID    string              `json:"sessionID,omitempty"`    // challenge
-	Nonce        string              `json:"nonce,omitempty"`        //
-	Challenges   []AcmeChallenge     `json:"challenges,omitempty"`   //
-	Combinations [][]int             `json:"combinations,omitempty"` //
-	Signature    LegacyAcmeSignature `json:"signature,omitempty"`    // authorizationRequest
-	Responses    []AcmeResponse      `json:"responses,omitempty"`    //
-	Contact      []string            `json:"contact,omitempty"`      //
-	RecoverToken string              `json:"recoverToken,omitempty"` // authorization
-	Jwk          JsonWebKey          `json:"jwk,omitempty"`          //
-	Csr          string              `json:"csr,omitempty"`          // certificateRequest
-	Certificate  string              `json:"certificate,omitempty"`  // certificate
-	Chain        []string            `json:"chain,omitempty"`        //
-	Refresh      string              `json:"refresh,omitempty"`      //
-	// No new fields for statusRequest, revocationRequest, revocation
-}
-
-// Quick error factories
-
-func acmeError(code, message string) AcmeMessage {
-	return AcmeMessage{
-		Type:    "error",
-		Error:   code,
-		Message: message,
-	}
-}
-
-func malformedRequestError() AcmeMessage {
-	return acmeError("malformed", "Malformed ACME request")
-}
-
-func notFoundError() AcmeMessage {
-	return acmeError("notFound", "Requested token not found")
-}
-
-func internalServerError() AcmeMessage {
-	return acmeError("internalServer", "Internal server error")
-}
-
-func notSupportedError() AcmeMessage {
-	return acmeError("notSupported", "Requested func not supported by this server")
-}
-
-func forbiddenError() AcmeMessage {
-	return acmeError("forbidden", "Requested action would violate the server's policy")
-}
-
-func unauthorizedError(message string) AcmeMessage {
-	return acmeError("unauthorized", message)
+	return wfe
 }
 
 // Method implementations
 
+func verifyPOST(request *http.Request) ([]byte, error) {
+	zero := []byte{}
+
+	// Read body
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		fmt.Printf("Error reading body: %+v\n", err)
+		return zero, err
+	}
+
+	// Parse as JWS
+	var jws jose.JsonWebSignature
+	err = json.Unmarshal(body, &jws)
+	if err != nil {
+		fmt.Printf("JWS unmarshal error: %+v\n", err)
+		return zero, err
+	}
+
+	// Verify JWS
+	err = jws.Verify()
+	if err != nil {
+		fmt.Printf("JWS verify error: %+v\n", err)
+		return zero, err
+	}
+
+	// TODO Return JWS body
+	return []byte(jws.Payload), nil
+}
+
+func makePathFromID(id string) string {
+	// TODO
+	return ""
+}
+
+// The ID is always the last slash-separated token in the path
+func parseIDFromPath(path string) string {
+	re := regexp.MustCompile("^.*/")
+	return re.ReplaceAllString(path, "")
+}
+
+func (wfe *WebFrontEndImpl) NewAuthz(response http.ResponseWriter, request *http.Request) {
+	if request.Method != "POST" {
+		http.Error(response, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := verifyPOST(request)
+	if err != nil {
+		http.Error(response, "Unable to read body", http.StatusBadRequest)
+		return
+	}
+
+	var init Authorization
+	err = json.Unmarshal(body, &init)
+	if err != nil {
+		http.Error(response, "Error unmarshaling JSON", http.StatusBadRequest)
+		return
+	}
+
+	// TODO: Create new authz and return
+	authz, err := wfe.RA.NewAuthorization(init, JsonWebKey{})
+	if err != nil {
+		http.Error(response,
+			fmt.Sprintf("Error creating new authz: %+v", err),
+			http.StatusInternalServerError)
+		return
+	}
+
+	// Make a URL for this authz, then blow away the ID before serializing
+	authzURL := wfe.authzBase + string(authz.ID)
+	authz.ID = Token("")
+	responseBody, err := json.Marshal(authz)
+	if err != nil {
+		http.Error(response, "Error marshaling authz", http.StatusInternalServerError)
+		return
+	}
+
+	response.Header().Add("Location", authzURL)
+	response.WriteHeader(http.StatusCreated)
+	response.Write(responseBody)
+}
+
+func (wfe *WebFrontEndImpl) NewCert(response http.ResponseWriter, request *http.Request) {
+	if request.Method != "POST" {
+		http.Error(response, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := verifyPOST(request)
+	if err != nil {
+		http.Error(response, "Unable to read body", http.StatusBadRequest)
+		return
+	}
+
+	var init CertificateRequest
+	err = json.Unmarshal(body, &init)
+	if err != nil {
+		fmt.Printf("Error unmarshaling certificate request body: %+v\n", err)
+		fmt.Printf("Body: %s", string(body))
+		http.Error(response, "Error unmarshaling certificate request", http.StatusBadRequest)
+		return
+	}
+
+	// TODO: Create new certificate and return
+	cert, err := wfe.RA.NewCertificate(init, JsonWebKey{})
+	if err != nil {
+		http.Error(response,
+			fmt.Sprintf("Error creating new cert: %+v", err),
+			http.StatusBadRequest)
+		return
+	}
+
+	// Make a URL for this authz
+	certURL := wfe.certBase + string(cert.ID)
+
+	// TODO: Content negotiation for cert format
+	response.Header().Add("Location", certURL)
+	response.WriteHeader(http.StatusCreated)
+	response.Write(cert.DER)
+}
+
+func (wfe *WebFrontEndImpl) Authz(response http.ResponseWriter, request *http.Request) {
+	// Requests to this handler should have a path that leads to a known authz
+	id := parseIDFromPath(request.URL.Path)
+	obj, err := wfe.SA.Get(Token(id))
+	if err != nil {
+		http.Error(response,
+			fmt.Sprintf("Unable to find authorization: %+v", err),
+			http.StatusNotFound)
+		return
+	}
+	authz := obj.(Authorization)
+
+	switch request.Method {
+	default:
+		http.Error(response, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+
+	case "POST":
+		body, err := verifyPOST(request)
+		if err != nil {
+			http.Error(response, "Unable to read body", http.StatusBadRequest)
+			return
+		}
+
+		var init Authorization
+		err = json.Unmarshal(body, &init)
+		if err != nil {
+			http.Error(response, "Error unmarshaling authorization", http.StatusBadRequest)
+			return
+		}
+
+		// Copy any new fields from new challenges to old challenges
+		// XXX: Should this be done by the RA?
+		for t, challenge := range authz.Challenges {
+			resp, ok := init.Challenges[t]
+			if !ok {
+				continue
+			}
+
+			authz.Challenges[t] = challenge.MergeResponse(resp)
+		}
+
+		wfe.SA.Update(authz.ID, authz)
+		wfe.VA.UpdateValidations(authz)
+
+		jsonReply, err := json.Marshal(authz)
+		if err != nil {
+			http.Error(response, "Failed to marshal authz", http.StatusInternalServerError)
+			return
+		}
+		response.WriteHeader(http.StatusAccepted)
+		response.Write(jsonReply)
+
+	case "GET":
+		jsonReply, err := json.Marshal(authz)
+		if err != nil {
+			http.Error(response, "Failed to marshal authz", http.StatusInternalServerError)
+			return
+		}
+		response.WriteHeader(http.StatusOK)
+		response.Write(jsonReply)
+	}
+}
+
+func (wfe *WebFrontEndImpl) Cert(response http.ResponseWriter, request *http.Request) {
+	switch request.Method {
+	default:
+		http.Error(response, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+
+	case "GET":
+		id := parseIDFromPath(request.URL.Path)
+		obj, err := wfe.SA.Get(Token(id))
+		if err != nil {
+			http.Error(response, "Not found", http.StatusNotFound)
+			return
+		}
+		cert := obj.(Certificate)
+
+		// TODO: Content negotiation
+		// TODO: Link header
+		jsonReply, err := json.Marshal(cert)
+		if err != nil {
+			http.Error(response, "Failed to marshal cert", http.StatusInternalServerError)
+			return
+		}
+		response.WriteHeader(http.StatusOK)
+		response.Write(jsonReply)
+
+	case "POST":
+		// TODO: Handle revocation in POST
+	}
+}
+
+/*
 func (wfe WebFrontEndImpl) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	// Check that the method is POST
 	if request.Method != "POST" {
@@ -297,3 +461,5 @@ func (wfe WebFrontEndImpl) OnAuthorizationUpdate(authz Authorization) {
 		wfe.deferredResponses[token] = unauthorizedError("Domain authorization failed")
 	}
 }
+
+*/

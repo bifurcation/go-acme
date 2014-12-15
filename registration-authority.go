@@ -12,16 +12,6 @@ import (
 	"regexp"
 )
 
-type challengeSet struct {
-	Domain     string
-	Challenges []AcmeChallenge
-}
-
-type pendingAuth struct {
-	Domain string
-	Key    JsonWebKey
-}
-
 type RegistrationAuthorityImpl struct {
 	WFE WebFrontEnd
 	CA  CertificateAuthority
@@ -54,9 +44,9 @@ func isEmpty(val string) bool {
 	return len(val) == 0
 }
 
-func createValidation(id AcmeIdentifier, challengeType string) Validation {
+func createChallenge(challengeType string) Challenge {
 	// Create the challenge
-	var challenge AcmeChallenge
+	var challenge Challenge
 	switch challengeType {
 	case "simpleHttps":
 		challenge = SimpleHTTPSChallenge()
@@ -64,13 +54,8 @@ func createValidation(id AcmeIdentifier, challengeType string) Validation {
 		challenge = DvsniChallenge()
 	}
 
-	return Validation{
-		ID:         Token(newToken()),
-		Identifier: id,
-		Status:     StatusPending,
-		Type:       challengeType,
-		Challenge:  challenge,
-	}
+	challenge.Status = StatusPending
+	return challenge
 }
 
 func fingerprint256(data []byte) string {
@@ -79,14 +64,14 @@ func fingerprint256(data []byte) string {
 	return b64enc(d.Sum(nil))
 }
 
-func (ra *RegistrationAuthorityImpl) NewAuthorization(request AuthorizationRequest, key JsonWebKey) (Authorization, error) {
+func (ra *RegistrationAuthorityImpl) NewAuthorization(request Authorization, key JsonWebKey) (Authorization, error) {
 	zero := Authorization{}
 	identifier := request.Identifier
 
 	// Check that the identifier is present and appropriate
 	if isEmpty(identifier.Value) {
 		return zero, MalformedRequestError("No identifier in authorization request")
-	} else if identifier.Type != "domain" {
+	} else if identifier.Type != IdentifierDNS {
 		return zero, NotSupportedError("Only domain validation is supported")
 	} else if forbiddenIdentifier(identifier.Value) {
 		return zero, UnauthorizedError("We will not authorize use of this identifier")
@@ -94,8 +79,8 @@ func (ra *RegistrationAuthorityImpl) NewAuthorization(request AuthorizationReque
 
 	// Create validations
 	authID := Token(newToken())
-	simpleHttps := createValidation(identifier, "simpleHttps")
-	dvsni := createValidation(identifier, "dvsni")
+	simpleHttps := createChallenge(ChallengeTypeSimpleHTTPS)
+	dvsni := createChallenge(ChallengeTypeDVSNI)
 
 	// Create a new authorization object
 	authz := Authorization{
@@ -103,9 +88,9 @@ func (ra *RegistrationAuthorityImpl) NewAuthorization(request AuthorizationReque
 		Identifier: identifier,
 		Key:        key,
 		Status:     StatusPending,
-		Validations: []Validation{
-			simpleHttps,
-			dvsni,
+		Challenges: map[string]Challenge{
+			ChallengeTypeSimpleHTTPS: simpleHttps,
+			ChallengeTypeDVSNI:       dvsni,
 		},
 	}
 
@@ -124,7 +109,7 @@ func (ra *RegistrationAuthorityImpl) NewCertificate(req CertificateRequest, jwk 
 
 	// Verify the CSR
 	// TODO: Verify that other aspects of the CSR are appropriate
-	err := VerifyCSR(&csr)
+	err := VerifyCSR(csr)
 	if err != nil {
 		return zero, UnauthorizedError("Invalid signature on CSR")
 	}
@@ -148,7 +133,7 @@ func (ra *RegistrationAuthorityImpl) NewCertificate(req CertificateRequest, jwk 
 	}
 
 	// Create the certificate
-	cert, err := ra.CA.IssueCertificate(csr)
+	cert, err := ra.CA.IssueCertificate(*csr)
 	if err != nil {
 		return zero, CertificateIssuanceError("Error issuing certificate")
 	}
@@ -181,7 +166,7 @@ func (ra *RegistrationAuthorityImpl) RevokeCertificate(cert x509.Certificate) er
 func (ra *RegistrationAuthorityImpl) OnValidationUpdate(authz Authorization) {
 	// Check to see whether the updated validations are sufficient
 	// Current policy is to accept if any validation succeeded
-	for _, val := range authz.Validations {
+	for _, val := range authz.Challenges {
 		if val.Status == StatusValid {
 			authz.Status = StatusValid
 			break
@@ -207,6 +192,4 @@ func (ra *RegistrationAuthorityImpl) OnValidationUpdate(authz Authorization) {
 		domainSet[authz.Identifier.Value] = true
 		ra.SA.Update(Token(authz.Key.Thumbprint), domainSet)
 	}
-
-	ra.WFE.OnAuthorizationUpdate(authz)
 }

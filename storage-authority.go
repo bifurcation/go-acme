@@ -5,10 +5,16 @@
 
 package anvil
 
-import ()
+import (
+	"fmt"
+)
 
 type SimpleStorageAuthorityImpl struct {
 	Storage map[Token]interface{}
+}
+
+func (sa *SimpleStorageAuthorityImpl) dumpState() {
+	fmt.Printf("Storage state: \n%+v\n", sa.Storage)
 }
 
 func NewSimpleStorageAuthorityImpl() SimpleStorageAuthorityImpl {

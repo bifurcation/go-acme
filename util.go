@@ -15,10 +15,12 @@ import (
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"hash"
 	"log"
 	"math/big"
+	"net/url"
 	"strings"
 )
 
@@ -82,6 +84,45 @@ func randomString(length int) string {
 
 func newToken() string {
 	return randomString(32)
+}
+
+// URLs and buffers that know how to marshal/unmarshal JSON
+
+type AcmeURL url.URL
+
+func (u *AcmeURL) MarshalJSON() ([]byte, error) {
+	uu := url.URL(*u)
+	return json.Marshal(uu.String())
+}
+
+func (u *AcmeURL) UnmarshalJSON(data []byte) error {
+	var str string
+	err := json.Unmarshal(data, &str)
+	if err != nil {
+		return err
+	}
+
+	uu, err := url.Parse(str)
+	*u = AcmeURL(*uu)
+	return err
+}
+
+type JsonBuffer json.RawMessage
+
+func (jb JsonBuffer) MarshalJSON() ([]byte, error) {
+	str := b64enc(jb)
+	return json.Marshal(str)
+}
+
+func (jb *JsonBuffer) UnmarshalJSON(data []byte) error {
+	var str string
+	err := json.Unmarshal(data, &str)
+	if err != nil {
+		return err
+	}
+
+	*jb, err = b64dec(str)
+	return err
 }
 
 // The missing CertificateRequest.Verify() method

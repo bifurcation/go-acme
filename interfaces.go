@@ -7,18 +7,14 @@ package anvil
 
 import (
 	"crypto/x509"
-	"net/http"
 )
 
 type WebFrontEnd interface {
-	ServeHTTP(http.ResponseWriter, *http.Request)
-
-	// Internal messages
-	OnAuthorizationUpdate(Authorization)
+	// Specialized methods for different functions
 }
 
 type RegistrationAuthority interface {
-	NewAuthorization(AuthorizationRequest, JsonWebKey) (Authorization, error)
+	NewAuthorization(Authorization, JsonWebKey) (Authorization, error)
 	NewCertificate(CertificateRequest, JsonWebKey) (Certificate, error)
 	RevokeCertificate(x509.Certificate) error
 

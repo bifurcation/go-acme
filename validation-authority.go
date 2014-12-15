@@ -25,42 +25,49 @@ func NewValidationAuthorityImpl() ValidationAuthorityImpl {
 	return ValidationAuthorityImpl{}
 }
 
-func SimpleHTTPSChallenge() AcmeChallenge {
-	return AcmeChallenge{
-		Type:  "simpleHttps",
+func SimpleHTTPSChallenge() Challenge {
+	return Challenge{
 		Token: newToken(),
 	}
 }
 
-func DvsniChallenge() AcmeChallenge {
+func DvsniChallenge() Challenge {
 	nonce := make([]byte, 16)
 	rand.Read(nonce)
-	return AcmeChallenge{
-		Type:  "dvsni",
+	return Challenge{
 		R:     randomString(32),
 		Nonce: hex.EncodeToString(nonce),
 	}
 }
 
-func (va ValidationAuthorityImpl) validateSimpleHTTPS(authz Authorization, index int) {
-	identifier := authz.Validations[index].Identifier.Value
-	challenge := authz.Validations[index].Challenge
-	response := authz.Validations[index].Response
+func (va ValidationAuthorityImpl) updateAndReturn(authz Authorization, challengeType string, challenge Challenge) {
+	authz.Challenges[challengeType] = challenge
+	va.RA.OnValidationUpdate(authz)
+}
 
-	if len(response.Path) == 0 {
-		authz.Validations[index].Status = StatusInvalid
-		va.RA.OnValidationUpdate(authz)
+// XXX: Use defer on the va.RA.OnValidationUpdate?
+//      Or maybe I already tried that and failed.
+func (va ValidationAuthorityImpl) validateSimpleHTTPS(authz Authorization) (challenge Challenge) {
+	identifier := authz.Identifier.Value
+	challenge, ok := authz.Challenges[ChallengeTypeSimpleHTTPS]
+
+	if !ok {
+		challenge.Status = StatusInvalid
+		return
+	}
+
+	if len(challenge.Path) == 0 {
+		challenge.Status = StatusInvalid
 		return
 	}
 
 	// XXX: Local version; uncomment for real version
-	url := fmt.Sprintf("http://localhost:5001/.well-known/acme-challenge/%s", response.Path)
-	//url := fmt.Sprintf("https://%s/.well-known/acme-challenge/%s", identifier, response.Path)
+	url := fmt.Sprintf("http://localhost:5001/.well-known/acme-challenge/%s", challenge.Path)
+	//url := fmt.Sprintf("https://%s/.well-known/acme-challenge/%s", identifier, challenge.Path)
 
 	httpRequest, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		authz.Validations[index].Status = StatusInvalid
-		va.RA.OnValidationUpdate(authz)
+		challenge.Status = StatusInvalid
 		return
 	}
 
@@ -72,40 +79,40 @@ func (va ValidationAuthorityImpl) validateSimpleHTTPS(authz Authorization, index
 		// Read body & test
 		body, err := ioutil.ReadAll(httpResponse.Body)
 		if err != nil {
-			authz.Validations[index].Status = StatusInvalid
-			va.RA.OnValidationUpdate(authz)
+			challenge.Status = StatusInvalid
 			return
 		}
 
 		if bytes.Compare(body, []byte(challenge.Token)) == 0 {
-			authz.Validations[index].Status = StatusValid
-			va.RA.OnValidationUpdate(authz)
+			challenge.Status = StatusValid
 			return
 		}
 	}
 
-	authz.Validations[index].Status = StatusInvalid
-	va.RA.OnValidationUpdate(authz)
+	challenge.Status = StatusInvalid
+	return
 }
 
-func (va ValidationAuthorityImpl) validateDvsni(authz Authorization, index int) {
-	// identifier := val.Identifier.Value // XXX see below
-	challenge := authz.Validations[index].Challenge
-	response := authz.Validations[index].Response
+func (va ValidationAuthorityImpl) validateDvsni(authz Authorization) (challenge Challenge) {
+	// identifier := authz.Identifier.Value // XXX: See below
+	challenge, ok := authz.Challenges[ChallengeTypeDVSNI]
+
+	if !ok {
+		challenge.Status = StatusInvalid
+		return
+	}
 
 	const DVSNI_SUFFIX = ".acme.invalid"
 	nonceName := challenge.Nonce + DVSNI_SUFFIX
 
 	R, err := b64dec(challenge.R)
 	if err != nil {
-		authz.Validations[index].Status = StatusInvalid
-		va.RA.OnValidationUpdate(authz)
+		challenge.Status = StatusInvalid
 		return
 	}
-	S, err := b64dec(response.S)
+	S, err := b64dec(challenge.S)
 	if err != nil {
-		authz.Validations[index].Status = StatusInvalid
-		va.RA.OnValidationUpdate(authz)
+		challenge.Status = StatusInvalid
 		return
 	}
 	RS := append(R, S...)
@@ -118,49 +125,53 @@ func (va ValidationAuthorityImpl) validateDvsni(authz Authorization, index int) 
 
 	// Make a connection with SNI = nonceName
 	hostPort := "localhost:5001"
-	//hostPort := identifier + ":443"
+	//hostPort := identifier + ":443" // XXX: Uncomment for real version
 	conn, err := tls.Dial("tcp", hostPort, &tls.Config{
 		ServerName:         nonceName,
 		InsecureSkipVerify: true,
 	})
 
 	if err != nil {
-		authz.Validations[index].Status = StatusInvalid
-		va.RA.OnValidationUpdate(authz)
+		challenge.Status = StatusInvalid
 		return
 	}
 
 	// Check that zName is a dNSName SAN in the server's certificate
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
-		authz.Validations[index].Status = StatusInvalid
-		va.RA.OnValidationUpdate(authz)
+		challenge.Status = StatusInvalid
 		return
 	}
 	for _, name := range certs[0].DNSNames {
 		if name == zName {
-			authz.Validations[index].Status = StatusValid
-			va.RA.OnValidationUpdate(authz)
+			challenge.Status = StatusValid
 			return
 		}
 	}
 
-	authz.Validations[index].Status = StatusInvalid
+	challenge.Status = StatusInvalid
+	return
+}
+
+func (va ValidationAuthorityImpl) validate(authz Authorization) {
+	// Select the first supported validation method
+	// XXX: Remove the "break" lines to process all supported validations
+	//      (warning: possible race conditions in you do this)
+	for i := range authz.Challenges {
+		switch i {
+		case "simpleHttps":
+			authz.Challenges[i] = va.validateSimpleHTTPS(authz)
+			break
+		case "dvsni":
+			authz.Challenges[i] = va.validateDvsni(authz)
+			break
+		}
+	}
+
 	va.RA.OnValidationUpdate(authz)
 }
 
 func (va ValidationAuthorityImpl) UpdateValidations(authz Authorization) error {
-	// Select the first supported validation method
-	for i, val := range authz.Validations {
-		switch val.Type {
-		case "simpleHttps":
-			go va.validateSimpleHTTPS(authz, i)
-			return nil
-		case "dvsni":
-			go va.validateDvsni(authz, i)
-			return nil
-		}
-	}
-
-	return NotSupportedError("No supported validation method")
+	go va.validate(authz)
+	return nil
 }

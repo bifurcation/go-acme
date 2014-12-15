@@ -217,7 +217,10 @@ func TestWebAPI(t *testing.T) {
 		va.RA = &ra
 
 		// Go!
-		http.Handle("/acme", wfe)
+		http.HandleFunc("/acme/new-authz", wfe.NewAuthz)
+		http.HandleFunc("/acme/new-cert", wfe.NewCert)
+		http.HandleFunc("/acme/authz/", wfe.Authz)
+		http.HandleFunc("/acme/cert/", wfe.Cert)
 		http.ListenAndServe("localhost:4000", nil)
 	}
 }
