@@ -48,6 +48,8 @@ Files
 * `util.go` - Miscellaneous utility methods
 * `anvil_test.go` - Unit tests
 
+If you want to run the CA, say to test client compatibility, just run the tests (`go test`).  The last test starts up the CA and runs until the Go test harness kills it (a couple of minutes).
+
 Dependencies:
 
 * Go platform libraries
