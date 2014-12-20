@@ -3,6 +3,15 @@ Anvil - An ACME CA
 
 This is an initial implementation of an ACME-based CA.  The [ACME protocol](https://github.com/letsencrypt/acme-spec/) allows the CA to automatically verify that an applicant for a certificate actually controls an identifier, and allows a domain holder to issue and revoke certificates for his domains.
 
+
+Quickstart
+----------
+
+If you want to run the CA, say to test client compatibility, just run the tests (`go test`).  The only test starts up the CA and runs until the Go test harness kills it (a couple of minutes).
+
+The ["restify" branch of node-acme](https://github.com/letsencrypt/node-acme/tree/restify) has a client that works with this server (`npm install node-acme && node node-acme/demo.js`).
+
+
 Component Model
 ---------------
 
@@ -47,8 +56,6 @@ Files
 * `objects.go` - Objects that are passed between components
 * `util.go` - Miscellaneous utility methods
 * `anvil_test.go` - Unit tests
-
-If you want to run the CA, say to test client compatibility, just run the tests (`go test`).  The last test starts up the CA and runs until the Go test harness kills it (a couple of minutes).
 
 Dependencies:
 
