@@ -16,11 +16,9 @@ import (
 )
 
 type CertificateAuthorityImpl struct {
-	certificates     map[string]x509.Certificate
-	revocationStatus map[string]bool // Serial -> boolean
-	privateKey       interface{}
-	certificate      x509.Certificate
-	derCertificate   []byte
+	privateKey     interface{}
+	certificate    x509.Certificate
+	derCertificate []byte
 }
 
 var (
@@ -84,11 +82,9 @@ func NewCertificateAuthorityImpl() (CertificateAuthorityImpl, error) {
 	}
 
 	return CertificateAuthorityImpl{
-		certificates:     make(map[string]x509.Certificate),
-		revocationStatus: make(map[string]bool),
-		privateKey:       priv,
-		certificate:      *certs[0],
-		derCertificate:   der,
+		privateKey:     priv,
+		certificate:    *certs[0],
+		derCertificate: der,
 	}, nil
 }
 
@@ -123,9 +119,4 @@ func (ca *CertificateAuthorityImpl) IssueCertificate(csr x509.CertificateRequest
 
 	// Sign
 	return x509.CreateCertificate(rand.Reader, &template, &ca.certificate, csr.PublicKey, ca.privateKey)
-}
-
-func (ca *CertificateAuthorityImpl) RevokeCertificate(cert x509.Certificate) error {
-	// TODO
-	return nil
 }

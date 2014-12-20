@@ -14,17 +14,23 @@ The CA is divided into the following main components:
 4. Certificate Authority
 5. Storage Authority
 
+This component model lets us separate the function of the CA by security context.  The Web Front End and Validation Authority need access to the Internet, which puts them at greater risk of compromise.  The Registration Authority can live without Internet connectivity, but still needs to talk to the Web Front End and Validation Authority.  The Certificate Authority need only receive instructions from the Registration Authority.
+
+```
+
+client <--ACME--> WFE ---+
+  .                      |
+  .                      +--- RA --- CA
+  .                      |
+client <-checks->  VA ---+
+
+```
+
 In Anvil, these components are represented by Go interfaces.  This allows us to have two operational modes: Consolidated and distributed.  In consolidated mode, the objects representing the different components interact directly, through function calls.  In distributed mode, each component runs in a separate process (possibly on a separate machine), and sees the other components' methods by way of a messaging layer.
 
-Internally, the logic of the system is based around three types of objects:
+Internally, the logic of the system is based around two types of objects, authorizations and certificates, mapping directly to the resources of the same name in ACME.
 
-* authorizations, managed by the RA
-* validations, managed by the VA
-* certificates, managed by the CA
-
-Conceptually, the completion of challenges leads to the completion of authorizations, and authorizations lead to certificates.  Ultimately, we may re-orient the ACME protocol around these objects, but for now, we use them internally.
-
-Requests from ACME clients result in new objects and changes objects.  The Storage Authority maintains persistent copies of the current set of objects.  Validation objects have no life of their own, however; they exist only inside authorization objects.
+Requests from ACME clients result in new objects and changes objects.  The Storage Authority maintains persistent copies of the current set of objects.
 
 Objects are also passed from one component to another on change events.  For example, when a client provides a successful response to a validation challenge, it results in a change to the corresponding validation object.  The Validation Authority forward the new validation object to the Storage Authority for storage, and to the Registration Authority for any updates to a related Authorization object.
 
@@ -40,8 +46,12 @@ Files
   * `storage-authority.go`
 * `objects.go` - Objects that are passed between components
 * `util.go` - Miscellaneous utility methods
-* `jwk.go` - An object representation for JSON Web Key objects
 * `anvil_test.go` - Unit tests
+
+Dependencies:
+
+* Go platform libraries
+* [GOSE](https://github.com/bifurcation/gose)
 
 
 ACME Processing
@@ -64,8 +74,9 @@ WebFE -> Client:  challenge
 Client -> WebFE:  authorizationRequest
 WebFE -> WebFE:   [ look up authorization based on nonce ]
 WebFE -> WebFE:   [ verify authorization signature ]
-WebFE -> WebFE:   [ add responses to authorization ]
-WebFE -> SA:      Update(Authorization.ID, Authorization)
+WebFE -> RA:      UpdateAuthorization(Authorization)
+RA -> RA:         [ add responses to authorization ]
+RA -> SA:         Update(Authorization.ID, Authorization)
 WebFE -> VA:      UpdateValidations(Authorization)
 WebFE -> Client:  defer(authorizationID)
 
@@ -108,7 +119,7 @@ WebFE -> Client:  revocation
 TODO
 ----
 
-* Add messaging layer
-* Add authority monitor
+* Add messaging layer to enable distributed mode
+* Add monitoring / syslog
 * Factor out policy layer (e.g., selection of challenges)
 * Add persistent storage

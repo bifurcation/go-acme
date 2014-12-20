@@ -7,43 +7,80 @@ package anvil
 
 import (
 	"crypto/x509"
+	"github.com/bifurcation/gose"
+	"net/http"
 )
 
+// A WebFrontEnd object supplies methods that can be hooked into
+// the Go http module's server functions, principally http.HandleFunc()
+//
+// It also provides methods to configure the base for authorization and
+// certificate URLs.
+//
+// It is assumed that the ACME server is laid out as follows:
+// * One URL for new-authorization -> NewAuthz
+// * One URL for new-certificate -> NewCert
+// * One path for authorizations -> Authz
+// * One path for certificates -> Cert
 type WebFrontEnd interface {
-	// Specialized methods for different functions
+	// Set the base URL for authorizations
+	SetAuthzBase(path string)
+
+	// Set the base URL for certificates
+	SetCertBase(path string)
+
+	// This method represents the ACME new-authorization resource
+	NewAuthz(response http.ResponseWriter, request *http.Request)
+
+	// This method represents the ACME new-certificate resource
+	NewCert(response http.ResponseWriter, request *http.Request)
+
+	// Provide access to requests for authorization resources
+	Authz(response http.ResponseWriter, request *http.Request)
+
+	// Provide access to requests for authorization resources
+	Cert(response http.ResponseWriter, request *http.Request)
 }
 
 type RegistrationAuthority interface {
-	NewAuthorization(Authorization, JsonWebKey) (Authorization, error)
-	NewCertificate(CertificateRequest, JsonWebKey) (Certificate, error)
+	// [WebFrontEnd]
+	NewAuthorization(Authorization, jose.JsonWebKey) (Authorization, error)
+
+	// [WebFrontEnd]
+	NewCertificate(CertificateRequest, jose.JsonWebKey) (Certificate, error)
+
+	// [WebFrontEnd]
+	UpdateAuthorization(Authorization) (Authorization, error)
+
+	// [WebFrontEnd]
 	RevokeCertificate(x509.Certificate) error
 
-	// Internal messages
+	// [ValidationAuthority]
 	OnValidationUpdate(Authorization)
 }
 
 type ValidationAuthority interface {
+	// [RegistrationAuthority]
 	UpdateValidations(Authorization) error
 }
 
 type CertificateAuthority interface {
+	// [RegistrationAuthority]
 	IssueCertificate(x509.CertificateRequest) ([]byte, error)
 }
 
-type StorageReader interface {
-	Get(Token) (interface{}, error)
+type StorageGetter interface {
+	Get(string) (interface{}, error)
 }
 
-type StorageWriter interface {
-	Put(interface{}) (Token, error)
-	Update(Token, interface{}) error
+type StorageUpdater interface {
+	Update(string, interface{}) error
 }
 
+// The StorageAuthority interface represnts a simple key/value
+// store.  It is divided into StorageGetter and StorageUpdater
+// interfaces for privilege separation.
 type StorageAuthority interface {
-	StorageReader
-	StorageWriter
+	StorageGetter
+	StorageUpdater
 }
-
-// Implemented elsewhere:
-// * ${INTERFACE}Impl
-// * ${INTERFACE}Delegate

@@ -25,9 +25,12 @@ func NewValidationAuthorityImpl() ValidationAuthorityImpl {
 	return ValidationAuthorityImpl{}
 }
 
+// Challenge factories
+
 func SimpleHTTPSChallenge() Challenge {
 	return Challenge{
-		Token: newToken(),
+		Status: StatusPending,
+		Token:  newToken(),
 	}
 }
 
@@ -35,22 +38,18 @@ func DvsniChallenge() Challenge {
 	nonce := make([]byte, 16)
 	rand.Read(nonce)
 	return Challenge{
-		R:     randomString(32),
-		Nonce: hex.EncodeToString(nonce),
+		Status: StatusPending,
+		R:      randomString(32),
+		Nonce:  hex.EncodeToString(nonce),
 	}
 }
 
-func (va ValidationAuthorityImpl) updateAndReturn(authz Authorization, challengeType string, challenge Challenge) {
-	authz.Challenges[challengeType] = challenge
-	va.RA.OnValidationUpdate(authz)
-}
+// Validation methods
 
-// XXX: Use defer on the va.RA.OnValidationUpdate?
-//      Or maybe I already tried that and failed.
 func (va ValidationAuthorityImpl) validateSimpleHTTPS(authz Authorization) (challenge Challenge) {
 	identifier := authz.Identifier.Value
-	challenge, ok := authz.Challenges[ChallengeTypeSimpleHTTPS]
 
+	challenge, ok := authz.Challenges[ChallengeTypeSimpleHTTPS]
 	if !ok {
 		challenge.Status = StatusInvalid
 		return
@@ -94,7 +93,7 @@ func (va ValidationAuthorityImpl) validateSimpleHTTPS(authz Authorization) (chal
 }
 
 func (va ValidationAuthorityImpl) validateDvsni(authz Authorization) (challenge Challenge) {
-	// identifier := authz.Identifier.Value // XXX: See below
+	// identifier := authz.Identifier.Value // XXX: Local version; uncomment for real version
 	challenge, ok := authz.Challenges[ChallengeTypeDVSNI]
 
 	if !ok {
@@ -125,7 +124,7 @@ func (va ValidationAuthorityImpl) validateDvsni(authz Authorization) (challenge 
 
 	// Make a connection with SNI = nonceName
 	hostPort := "localhost:5001"
-	//hostPort := identifier + ":443" // XXX: Uncomment for real version
+	//hostPort := identifier + ":443" // XXX: Local version; uncomment for real version
 	conn, err := tls.Dial("tcp", hostPort, &tls.Config{
 		ServerName:         nonceName,
 		InsecureSkipVerify: true,
@@ -153,10 +152,11 @@ func (va ValidationAuthorityImpl) validateDvsni(authz Authorization) (challenge 
 	return
 }
 
+// Overall validation process
+
 func (va ValidationAuthorityImpl) validate(authz Authorization) {
 	// Select the first supported validation method
 	// XXX: Remove the "break" lines to process all supported validations
-	//      (warning: possible race conditions in you do this)
 	for i := range authz.Challenges {
 		switch i {
 		case "simpleHttps":

@@ -8,12 +8,12 @@ package anvil
 import (
 	"crypto/x509"
 	"encoding/json"
+	"github.com/bifurcation/gose"
 	"time"
 )
 
 type IdentifierType string
 type AcmeStatus string
-type Token string
 type Buffer []byte
 
 const (
@@ -56,13 +56,12 @@ type AcmeIdentifier struct {
 // JSON unmarshal to properly unmarshal client requests.)
 type CertificateRequest struct {
 	CSR            *x509.CertificateRequest // The CSR
-	Authorizations []string                 // Authorizations over the account key
-	Key            JsonWebKey               // The account key that signed the request
+	Authorizations []AcmeURL                // Links to Authorization over the account key
 }
 
 type rawCertificateRequest struct {
-	CSR            JsonBuffer `json:"csr"`            // The encoded CSR
-	Authorizations []string   `json:"authorizations"` // Authorizations
+	CSR            jose.JsonBuffer `json:"csr"`            // The encoded CSR
+	Authorizations []AcmeURL       `json:"authorizations"` // Authorizations
 }
 
 func (cr *CertificateRequest) UnmarshalJSON(data []byte) error {
@@ -105,8 +104,8 @@ type Challenge struct {
 	Nonce string `json:"nonce,omitempty"`
 }
 
+// Merge a client-provide response to a challenge with the issued challenge
 func (ch Challenge) MergeResponse(resp Challenge) Challenge {
-	// Don't touch Status or Completed
 	// Only override fields that are supposed to be client-provided
 	if len(ch.Path) == 0 {
 		ch.Path = resp.Path
@@ -127,13 +126,13 @@ func (ch Challenge) MergeResponse(resp Challenge) Challenge {
 type Authorization struct {
 	// An identifier for this authorization, unique across
 	// authorizations and certificates within this anvil instance.
-	ID Token `json:"id,omitempty"`
+	ID string `json:"id,omitempty"`
 
 	// The identifier for which authorization is being given
 	Identifier AcmeIdentifier `json:"identifier,omitempty"`
 
 	// The account key that is authorized for the identifier
-	Key JsonWebKey `json:"key,omitempty"`
+	Key jose.JsonWebKey `json:"key,omitempty"`
 
 	// The status of the validation of this authorization
 	Status AcmeStatus `json:"status,omitempty"`
@@ -163,10 +162,10 @@ type Authorization struct {
 type Certificate struct {
 	// An identifier for this authorization, unique across
 	// authorizations and certificates within this anvil instance.
-	ID Token
+	ID string
 
 	// The certificate itself
-	DER JsonBuffer
+	DER jose.JsonBuffer
 
 	// The revocation status of the certificate.
 	// * "valid" - not revoked

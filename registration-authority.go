@@ -9,12 +9,16 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"fmt"
+	"github.com/bifurcation/gose"
 	"regexp"
 )
 
+// All of the fields in RegistrationAuthorityImpl need to be
+// populated, or there is a risk of panic.
 type RegistrationAuthorityImpl struct {
 	WFE WebFrontEnd
 	CA  CertificateAuthority
+	VA  ValidationAuthority
 	SA  StorageAuthority
 }
 
@@ -40,36 +44,18 @@ func forbiddenIdentifier(id string) bool {
 	return false
 }
 
-func isEmpty(val string) bool {
-	return len(val) == 0
-}
-
-func createChallenge(challengeType string) Challenge {
-	// Create the challenge
-	var challenge Challenge
-	switch challengeType {
-	case "simpleHttps":
-		challenge = SimpleHTTPSChallenge()
-	case "dvsni":
-		challenge = DvsniChallenge()
-	}
-
-	challenge.Status = StatusPending
-	return challenge
-}
-
 func fingerprint256(data []byte) string {
 	d := sha256.New()
 	d.Write(data)
 	return b64enc(d.Sum(nil))
 }
 
-func (ra *RegistrationAuthorityImpl) NewAuthorization(request Authorization, key JsonWebKey) (Authorization, error) {
+func (ra *RegistrationAuthorityImpl) NewAuthorization(request Authorization, key jose.JsonWebKey) (Authorization, error) {
 	zero := Authorization{}
 	identifier := request.Identifier
 
 	// Check that the identifier is present and appropriate
-	if isEmpty(identifier.Value) {
+	if len(identifier.Value) == 0 {
 		return zero, MalformedRequestError("No identifier in authorization request")
 	} else if identifier.Type != IdentifierDNS {
 		return zero, NotSupportedError("Only domain validation is supported")
@@ -78,9 +64,9 @@ func (ra *RegistrationAuthorityImpl) NewAuthorization(request Authorization, key
 	}
 
 	// Create validations
-	authID := Token(newToken())
-	simpleHttps := createChallenge(ChallengeTypeSimpleHTTPS)
-	dvsni := createChallenge(ChallengeTypeDVSNI)
+	authID := newToken()
+	simpleHttps := SimpleHTTPSChallenge()
+	dvsni := DvsniChallenge()
 
 	// Create a new authorization object
 	authz := Authorization{
@@ -103,7 +89,7 @@ func (ra *RegistrationAuthorityImpl) NewAuthorization(request Authorization, key
 	return authz, nil
 }
 
-func (ra *RegistrationAuthorityImpl) NewCertificate(req CertificateRequest, jwk JsonWebKey) (Certificate, error) {
+func (ra *RegistrationAuthorityImpl) NewCertificate(req CertificateRequest, jwk jose.JsonWebKey) (Certificate, error) {
 	csr := req.CSR
 	zero := Certificate{}
 
@@ -115,13 +101,14 @@ func (ra *RegistrationAuthorityImpl) NewCertificate(req CertificateRequest, jwk 
 	}
 
 	// Get the authorized domain list for the authorization key
-	obj, err := ra.SA.Get(Token(jwk.Thumbprint))
+	obj, err := ra.SA.Get(jwk.Thumbprint)
 	if err != nil {
 		return zero, UnauthorizedError("No authorized domains for this key")
 	}
 	domainSet := obj.(map[string]bool)
 
 	// Validate that authorization key is authorized for all domains
+	// TODO: Use linked authorizations?
 	names := csr.DNSNames
 	if len(csr.Subject.CommonName) > 0 {
 		names = append(names, csr.Subject.CommonName)
@@ -140,7 +127,7 @@ func (ra *RegistrationAuthorityImpl) NewCertificate(req CertificateRequest, jwk 
 
 	// Identify the certificate object by the cert's SHA-256 fingerprint
 	certObj := Certificate{
-		ID:     Token(fingerprint256(cert)),
+		ID:     fingerprint256(cert),
 		DER:    cert,
 		Status: StatusValid,
 	}
@@ -149,9 +136,45 @@ func (ra *RegistrationAuthorityImpl) NewCertificate(req CertificateRequest, jwk 
 	return certObj, nil
 }
 
+func (ra *RegistrationAuthorityImpl) UpdateAuthorization(delta Authorization) (Authorization, error) {
+	zero := Authorization{}
+
+	// Fetch the copy of this authorization we have on file
+	obj, err := ra.SA.Get(delta.ID)
+	if err != nil {
+		return zero, err
+	}
+	authz := obj.(Authorization)
+
+	// Copy information over that the client is allowed to supply
+	if len(delta.Contact) > 0 {
+		authz.Contact = delta.Contact
+	}
+	newResponse := false
+	for t, challenge := range authz.Challenges {
+		response, present := delta.Challenges[t]
+		if !present {
+			continue
+		}
+
+		newResponse = true
+		authz.Challenges[t] = challenge.MergeResponse(response)
+	}
+
+	// Store the updated version
+	ra.SA.Update(authz.ID, authz)
+
+	// If any challenges were updated, dispatch to the VA for service
+	if newResponse {
+		ra.VA.UpdateValidations(authz)
+	}
+
+	return authz, nil
+}
+
 func (ra *RegistrationAuthorityImpl) RevokeCertificate(cert x509.Certificate) error {
 	// Attempt to fetch the corresponding certificate object
-	certID := Token(fingerprint256(cert.Raw))
+	certID := fingerprint256(cert.Raw)
 	obj, err := ra.SA.Get(certID)
 	if err != nil {
 		return err
@@ -183,13 +206,13 @@ func (ra *RegistrationAuthorityImpl) OnValidationUpdate(authz Authorization) {
 	// Record a new domain/key binding, if authorized
 	if authz.Status == StatusValid {
 		var domainSet map[string]bool
-		obj, err := ra.SA.Get(Token(authz.Key.Thumbprint))
+		obj, err := ra.SA.Get(authz.Key.Thumbprint)
 		if err != nil {
 			domainSet = make(map[string]bool)
 		} else {
 			domainSet = obj.(map[string]bool)
 		}
 		domainSet[authz.Identifier.Value] = true
-		ra.SA.Update(Token(authz.Key.Thumbprint), domainSet)
+		ra.SA.Update(authz.Key.Thumbprint, domainSet)
 	}
 }

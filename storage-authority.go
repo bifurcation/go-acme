@@ -10,7 +10,7 @@ import (
 )
 
 type SimpleStorageAuthorityImpl struct {
-	Storage map[Token]interface{}
+	Storage map[string]interface{}
 }
 
 func (sa *SimpleStorageAuthorityImpl) dumpState() {
@@ -19,22 +19,16 @@ func (sa *SimpleStorageAuthorityImpl) dumpState() {
 
 func NewSimpleStorageAuthorityImpl() SimpleStorageAuthorityImpl {
 	return SimpleStorageAuthorityImpl{
-		Storage: make(map[Token]interface{}),
+		Storage: make(map[string]interface{}),
 	}
 }
 
-func (sa *SimpleStorageAuthorityImpl) Put(object interface{}) (Token, error) {
-	token := Token(newToken())
-	err := sa.Update(token, object)
-	return token, err
-}
-
-func (sa *SimpleStorageAuthorityImpl) Update(token Token, object interface{}) error {
+func (sa *SimpleStorageAuthorityImpl) Update(token string, object interface{}) error {
 	sa.Storage[token] = object
 	return nil
 }
 
-func (sa *SimpleStorageAuthorityImpl) Get(token Token) (interface{}, error) {
+func (sa *SimpleStorageAuthorityImpl) Get(token string) (interface{}, error) {
 	value, ok := sa.Storage[token]
 	if ok {
 		return value, nil
