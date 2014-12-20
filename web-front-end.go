@@ -143,7 +143,7 @@ func (wfe *WebFrontEndImpl) NewCert(response http.ResponseWriter, request *http.
 		return
 	}
 
-	// TODO: Create new certificate and return
+	// Create new certificate and return
 	cert, err := wfe.RA.NewCertificate(init, JsonWebKey{})
 	if err != nil {
 		http.Error(response,
