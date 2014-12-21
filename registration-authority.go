@@ -16,10 +16,9 @@ import (
 // All of the fields in RegistrationAuthorityImpl need to be
 // populated, or there is a risk of panic.
 type RegistrationAuthorityImpl struct {
-	WFE WebFrontEnd
-	CA  CertificateAuthority
-	VA  ValidationAuthority
-	SA  StorageAuthority
+	CA CertificateAuthority
+	VA ValidationAuthority
+	SA StorageAuthority
 }
 
 func NewRegistrationAuthorityImpl() RegistrationAuthorityImpl {

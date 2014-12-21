@@ -6,6 +6,7 @@
 package anvil
 
 import (
+	"log"
 	"net/http"
 	"testing"
 )
@@ -15,10 +16,12 @@ import (
 // WebAPI Test
 // XXX Only for manual testing
 
-const ENABLE_WEB = true
+const ENABLE_WEB = false
 
 func TestWebAPI(t *testing.T) {
 	if ENABLE_WEB {
+		log.Printf(" [*] Running WebAPI")
+
 		// Create the components
 		wfe := NewWebFrontEndImpl()
 		sa := NewSimpleStorageAuthorityImpl()
@@ -33,12 +36,89 @@ func TestWebAPI(t *testing.T) {
 		// Wire them up
 		wfe.RA = &ra
 		wfe.SA = &sa
-		wfe.VA = &va
-		ra.WFE = &wfe
 		ra.CA = &ca
 		ra.SA = &sa
 		ra.VA = &va
 		va.RA = &ra
+
+		// Go!
+		authority := "localhost:4000"
+		authzPath := "/acme/authz/"
+		certPath := "/acme/cert/"
+		wfe.SetAuthzBase("http://" + authority + authzPath)
+		wfe.SetCertBase("http://" + authority + certPath)
+		http.HandleFunc("/acme/new-authz", wfe.NewAuthz)
+		http.HandleFunc("/acme/new-cert", wfe.NewCert)
+		http.HandleFunc("/acme/authz/", wfe.Authz)
+		http.HandleFunc("/acme/cert/", wfe.Cert)
+		http.ListenAndServe("localhost:4000", nil)
+	}
+}
+
+// WebAPI Test with AMQP
+// XXX Only for manual testing
+
+const ENABLE_WEB_AMQP = true
+
+func TestWebAPIAMQP(t *testing.T) {
+	if ENABLE_WEB_AMQP {
+		log.Printf(" [*] Running WebAPI with AMQP")
+
+		// Create the components
+		wfe := NewWebFrontEndImpl()
+		sa := NewSimpleStorageAuthorityImpl()
+
+		// Create an AMQP channel
+		ch, err := amqpConnect("amqp://guest:guest@localhost:5672")
+		if err != nil {
+			t.Errorf("Failed to create AMQP connection")
+			return
+		}
+
+		// Create AMQP-RPC clients for CA, VA, RA
+		cac, err := NewCertificateAuthorityClient("CA.client", "CA.server", ch)
+		if err != nil {
+			t.Errorf("Failed to generate CA client")
+			return
+		}
+		vac, err := NewValidationAuthorityClient("VA.client", "VA.server", ch)
+		if err != nil {
+			t.Errorf("Failed to generate VA client")
+			return
+		}
+		rac, err := NewRegistrationAuthorityClient("RA.client", "RA.server", ch)
+		if err != nil {
+			t.Errorf("Failed to generate RA client")
+			return
+		}
+
+		// ... and corresponding servers
+		// (We need this order so that we can give the servers
+		//  references to the clients)
+		cas, err := NewCertificateAuthorityServer("CA.server", ch)
+		if err != nil {
+			t.Errorf("Failed to generate CA server")
+			return
+		}
+		vas, err := NewValidationAuthorityServer("VA.server", ch, &rac)
+		if err != nil {
+			t.Errorf("Failed to generate VA server")
+			return
+		}
+		ras, err := NewRegistrationAuthorityServer("RA.server", ch, &vac, &cac, &sa)
+		if err != nil {
+			t.Errorf("Failed to generate RA server")
+			return
+		}
+
+		// Start the servers
+		cas.Start()
+		vas.Start()
+		ras.Start()
+
+		// Wire up the front end (wrappers are already wired)
+		wfe.RA = &rac
+		wfe.SA = &sa
 
 		// Go!
 		authority := "localhost:4000"

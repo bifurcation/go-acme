@@ -81,6 +81,13 @@ func (cr *CertificateRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (cr CertificateRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(rawCertificateRequest{
+		CSR:            cr.CSR.Raw,
+		Authorizations: cr.Authorizations,
+	})
+}
+
 // Rather than define individual types for different types of
 // challenge, we just throw all the elements into one bucket,
 // together with the common metadata elements.

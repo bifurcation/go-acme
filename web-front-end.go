@@ -16,7 +16,6 @@ import (
 
 type WebFrontEndImpl struct {
 	RA RegistrationAuthority
-	VA ValidationAuthority
 	SA StorageGetter
 
 	// URL configuration parameters
