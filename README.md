@@ -7,7 +7,12 @@ This is an initial implementation of an ACME-based CA.  The [ACME protocol](http
 Quickstart
 ----------
 
-If you want to run the CA, say to test client compatibility, just run the tests (`go test`).  The only test starts up the CA and runs until the Go test harness kills it (a couple of minutes).
+```
+go get github.com/letsencrypt/anvil
+go build github.com/letsencrypt/anvil/anvil-start
+./anvil-start monolithic # without AMQP
+./anvil-start monolithic-amqp # with AMQP
+```
 
 The ["restify" branch of node-acme](https://github.com/letsencrypt/node-acme/tree/restify) has a client that works with this server (`npm install node-acme && node node-acme/demo.js`).
 
@@ -43,6 +48,7 @@ Requests from ACME clients result in new objects and changes objects.  The Stora
 
 Objects are also passed from one component to another on change events.  For example, when a client provides a successful response to a validation challenge, it results in a change to the corresponding validation object.  The Validation Authority forward the new validation object to the Storage Authority for storage, and to the Registration Authority for any updates to a related Authorization object.
 
+Anvil supports distributed operation using AMQP as a message bus (e.g., via RabbitMQ).  For components that you want to be remote, it is necessary to instantiate a "client" and "server" for that component.  The client implements the component's Go interface, while the server has the actual logic for the component.  More details in `amqp-rpc.go`.
 
 Files
 -----
@@ -53,6 +59,8 @@ Files
   * `validation-authority.go`
   * `certificate-authority.go`
   * `storage-authority.go`
+* `amqp-rpc.go` - A lightweight RPC framework overlaid on AMQP
+  * `rpc-wrappers.go` - RPC wrappers for the various component type
 * `objects.go` - Objects that are passed between components
 * `util.go` - Miscellaneous utility methods
 * `anvil_test.go` - Unit tests
@@ -128,7 +136,8 @@ WebFE -> Client:  revocation
 TODO
 ----
 
-* Add messaging layer to enable distributed mode
+* Ensure that distributed mode works with multiple processes
+* Add message signing and verification to the AMQP message layer
 * Add monitoring / syslog
 * Factor out policy layer (e.g., selection of challenges)
 * Add persistent storage
