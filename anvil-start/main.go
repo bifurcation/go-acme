@@ -62,6 +62,97 @@ func main() {
 	// AMQP queue names are hard-coded for now
 	app.Commands = []cli.Command{
 		{
+			Name:  "monolithic",
+			Usage: "Start the CA in monolithic mode, without using AMQP",
+			Action: func(c *cli.Context) {
+				// Create the components
+				wfe := anvil.NewWebFrontEndImpl()
+				sa := anvil.NewSimpleStorageAuthorityImpl()
+				ra := anvil.NewRegistrationAuthorityImpl()
+				va := anvil.NewValidationAuthorityImpl()
+				ca, err := anvil.NewCertificateAuthorityImpl()
+				failOnError(err, "Unable to create CA")
+
+				// Wire them up
+				wfe.RA = &ra
+				wfe.SA = &sa
+				ra.CA = &ca
+				ra.SA = &sa
+				ra.VA = &va
+				va.RA = &ra
+
+				// Go!
+				authority := "localhost:4000"
+				authzPath := "/acme/authz/"
+				certPath := "/acme/cert/"
+				wfe.SetAuthzBase("http://" + authority + authzPath)
+				wfe.SetCertBase("http://" + authority + certPath)
+				http.HandleFunc("/acme/new-authz", wfe.NewAuthz)
+				http.HandleFunc("/acme/new-cert", wfe.NewCert)
+				http.HandleFunc("/acme/authz/", wfe.Authz)
+				http.HandleFunc("/acme/cert/", wfe.Cert)
+
+				fmt.Fprintf(os.Stderr, "Server running...\n")
+				err = http.ListenAndServe(authority, nil)
+				failOnError(err, "Error starting HTTP server")
+			},
+		},
+		{
+			Name:  "monolithic-amqp",
+			Usage: "Start the CA in monolithic mode, using AMQP",
+			Action: func(c *cli.Context) {
+				// Create an AMQP channel
+				ch := amqpChannel(amqpServerURL)
+
+				// Create AMQP-RPC clients for CA, VA, RA, SA
+				cac, err := anvil.NewCertificateAuthorityClient("CA.client", "CA.server", ch)
+				failOnError(err, "Failed to create CA client")
+				vac, err := anvil.NewValidationAuthorityClient("VA.client", "VA.server", ch)
+				failOnError(err, "Failed to create VA client")
+				rac, err := anvil.NewRegistrationAuthorityClient("RA.client", "RA.server", ch)
+				failOnError(err, "Failed to create RA client")
+				sac, err := anvil.NewStorageAuthorityClient("SA.client", "SA.server", ch)
+				failOnError(err, "Failed to create SA client")
+
+				// ... and corresponding servers
+				// (We need this order so that we can give the servers
+				//  references to the clients)
+				cas, err := anvil.NewCertificateAuthorityServer("CA.server", ch)
+				failOnError(err, "Failed to create CA server")
+				vas, err := anvil.NewValidationAuthorityServer("VA.server", ch, &rac)
+				failOnError(err, "Failed to create VA server")
+				ras, err := anvil.NewRegistrationAuthorityServer("RA.server", ch, &vac, &cac, &sac)
+				failOnError(err, "Failed to create RA server")
+				sas := anvil.NewStorageAuthorityServer("SA.server", ch)
+
+				// Start the servers
+				cas.Start()
+				vas.Start()
+				ras.Start()
+				sas.Start()
+
+				// Wire up the front end (wrappers are already wired)
+				wfe := anvil.NewWebFrontEndImpl()
+				wfe.RA = &rac
+				wfe.SA = &sac
+
+				// Go!
+				authority := "localhost:4000"
+				authzPath := "/acme/authz/"
+				certPath := "/acme/cert/"
+				wfe.SetAuthzBase("http://" + authority + authzPath)
+				wfe.SetCertBase("http://" + authority + certPath)
+				http.HandleFunc("/acme/new-authz", wfe.NewAuthz)
+				http.HandleFunc("/acme/new-cert", wfe.NewCert)
+				http.HandleFunc("/acme/authz/", wfe.Authz)
+				http.HandleFunc("/acme/cert/", wfe.Cert)
+
+				fmt.Fprintf(os.Stderr, "Server running...\n")
+				err = http.ListenAndServe(authority, nil)
+				failOnError(err, "Error starting HTTP server")
+			},
+		},
+		{
 			Name:  "wfe",
 			Usage: "Start the WebFrontEnd",
 			Action: func(c *cli.Context) {
@@ -89,6 +180,8 @@ func main() {
 				http.HandleFunc("/acme/new-cert", wfe.NewCert)
 				http.HandleFunc("/acme/authz/", wfe.Authz)
 				http.HandleFunc("/acme/cert/", wfe.Cert)
+
+				fmt.Fprintf(os.Stderr, "Server running...\n")
 				http.ListenAndServe(authority, nil)
 			},
 		},
