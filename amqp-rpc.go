@@ -1,3 +1,8 @@
+// Copyright 2014 ISRG.  All rights reserved
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 package anvil
 
 import (
@@ -102,6 +107,7 @@ func (rpc *AmqpRpcServer) Start() (err error) {
 
 	go func() {
 		for msg := range msgs {
+			// XXX-JWS: jws.Verify(body)
 			cb, present := rpc.dispatchTable[msg.Type]
 			log.Printf(" [s<] received %s(%s) [%s]", msg.Type, b64enc(msg.Body), msg.CorrelationId)
 			if present {
@@ -115,7 +121,7 @@ func (rpc *AmqpRpcServer) Start() (err error) {
 					amqp.Publishing{
 						CorrelationId: msg.CorrelationId,
 						Type:          msg.Type,
-						Body:          response,
+						Body:          response, // XXX-JWS: jws.Sign(privKey, body)
 					})
 			}
 		}
@@ -166,6 +172,7 @@ func NewAmqpRpcClient(clientQueue, serverQueue string, channel *amqp.Channel) (r
 
 	go func() {
 		for msg := range msgs {
+			// XXX-JWS: jws.Sign(privKey, body)
 			corrID := msg.CorrelationId
 			responseChan, present := rpc.pending[corrID]
 
@@ -188,7 +195,7 @@ func (rpc *AmqpRpcClient) Dispatch(method string, body []byte) chan []byte {
 	// Create a channel on which to direct the response
 	// At least in some cases, it's important that this channel
 	// be buffered to avoid deadlock
-	responseChan := make(chan []byte, 10)
+	responseChan := make(chan []byte, 1)
 	corrID := newToken()
 	rpc.pending[corrID] = responseChan
 
@@ -203,7 +210,7 @@ func (rpc *AmqpRpcClient) Dispatch(method string, body []byte) chan []byte {
 			CorrelationId: corrID,
 			ReplyTo:       rpc.clientQueue,
 			Type:          method,
-			Body:          body,
+			Body:          body, // XXX-JWS: jws.Sign(privKey, body)
 		})
 
 	return responseChan
@@ -216,8 +223,9 @@ func (rpc *AmqpRpcClient) DispatchSync(method string, body []byte) (response []b
 	case <-time.After(rpc.timeout):
 		log.Printf(" [c!] AMQP-RPC timeout [%s]", method)
 		err = errors.New("AMQP-RPC timeout")
+		return
 	}
-	err = errors.New("Unkown error in SyncDispatch")
+	err = errors.New("Unknown error in SyncDispatch")
 	return
 }
 
