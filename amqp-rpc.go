@@ -188,7 +188,7 @@ func (rpc *AmqpRpcClient) Dispatch(method string, body []byte) chan []byte {
 	// Create a channel on which to direct the response
 	// At least in some cases, it's important that this channel
 	// be buffered to avoid deadlock
-	responseChan := make(chan []byte, 1)
+	responseChan := make(chan []byte, 10)
 	corrID := newToken()
 	rpc.pending[corrID] = responseChan
 

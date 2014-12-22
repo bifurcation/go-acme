@@ -64,10 +64,6 @@ func TestWebAPIAMQP(t *testing.T) {
 	if ENABLE_WEB_AMQP {
 		log.Printf(" [*] Running WebAPI with AMQP")
 
-		// Create the components
-		wfe := NewWebFrontEndImpl()
-		sa := NewSimpleStorageAuthorityImpl()
-
 		// Create an AMQP channel
 		ch, err := amqpConnect("amqp://guest:guest@localhost:5672")
 		if err != nil {
@@ -75,7 +71,7 @@ func TestWebAPIAMQP(t *testing.T) {
 			return
 		}
 
-		// Create AMQP-RPC clients for CA, VA, RA
+		// Create AMQP-RPC clients for CA, VA, RA, SA
 		cac, err := NewCertificateAuthorityClient("CA.client", "CA.server", ch)
 		if err != nil {
 			t.Errorf("Failed to generate CA client")
@@ -89,6 +85,11 @@ func TestWebAPIAMQP(t *testing.T) {
 		rac, err := NewRegistrationAuthorityClient("RA.client", "RA.server", ch)
 		if err != nil {
 			t.Errorf("Failed to generate RA client")
+			return
+		}
+		sac, err := NewStorageAuthorityClient("SA.client", "SA.server", ch)
+		if err != nil {
+			t.Errorf("Failed to generate SA client")
 			return
 		}
 
@@ -105,9 +106,14 @@ func TestWebAPIAMQP(t *testing.T) {
 			t.Errorf("Failed to generate VA server")
 			return
 		}
-		ras, err := NewRegistrationAuthorityServer("RA.server", ch, &vac, &cac, &sa)
+		ras, err := NewRegistrationAuthorityServer("RA.server", ch, &vac, &cac, &sac)
 		if err != nil {
 			t.Errorf("Failed to generate RA server")
+			return
+		}
+		sas := NewStorageAuthorityServer("SA.server", ch)
+		if err != nil {
+			t.Errorf("Failed to generate SA server")
 			return
 		}
 
@@ -115,10 +121,12 @@ func TestWebAPIAMQP(t *testing.T) {
 		cas.Start()
 		vas.Start()
 		ras.Start()
+		sas.Start()
 
 		// Wire up the front end (wrappers are already wired)
+		wfe := NewWebFrontEndImpl()
 		wfe.RA = &rac
-		wfe.SA = &sa
+		wfe.SA = &sac
 
 		// Go!
 		authority := "localhost:4000"
