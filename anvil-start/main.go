@@ -7,8 +7,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/bifurcation/go-acme"
 	"github.com/codegangsta/cli"
+	"github.com/letsencrypt/anvil"
 	"github.com/streadway/amqp"
 	"net/http"
 	"os"

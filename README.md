@@ -8,14 +8,23 @@ Quickstart
 ----------
 
 ```
-go get github.com/letsencrypt/anvil
-go build github.com/letsencrypt/anvil/anvil-start
-./anvil-start monolithic # without AMQP
-./anvil-start monolithic-amqp # with AMQP
+> go get github.com/letsencrypt/anvil
+> go build github.com/letsencrypt/anvil/anvil-start
+> ./anvil-start monolithic # without AMQP
+> ./anvil-start monolithic-amqp # with AMQP
 ```
+
 
 The ["restify" branch of node-acme](https://github.com/letsencrypt/node-acme/tree/restify) has a client that works with this server (`npm install node-acme && node node-acme/demo.js`).
 
+```
+> git clone https://github.com/letsencrypt/node-acme.git
+> cd node-acme
+> git branch -f restify origin/restify && git checkout restify
+> cd ..
+> npm install node-acme
+> node node-acme/demo.js
+```
 
 Component Model
 ---------------
@@ -69,6 +78,7 @@ Dependencies:
 
 * Go platform libraries
 * [GOSE](https://github.com/bifurcation/gose)
+* [CLI](github.com/codegangsta/cli)
 
 
 ACME Processing
